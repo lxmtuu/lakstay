@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LakStay Admin — Hệ thống quản trị đặt phòng</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%230c3527'/><path d='M5 19h14M7 19V10l5-4.5L17 10v9M10 19v-5h4v5' stroke='%23e3c47e' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/admin.css">
+</head>
+<body class="admin">
+<div class="adm">
+  <aside class="adm-side" id="side">
+    <a class="brand" href="/">
+      <span class="mark" data-icon="logo"></span><span>LakStay<small>Admin</small></span>
+    </a>
+    <div id="side-nav"></div>
+    <div class="foot">
+      <div id="who"></div>
+      <div class="row gap-8" style="margin-top:10px">
+        <a href="/" class="btn btn-ghost-light btn-sm" style="flex:1">Website</a>
+        <button class="btn btn-ghost-light btn-sm" id="out" style="flex:1">Thoát</button>
+      </div>
+    </div>
+  </aside>
+  <div>
+    <div class="adm-top">
+      <button class="adm-toggle" id="tg" aria-label="Menu"><svg viewBox="0 0 24 24" width="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <h1 id="title">Bảng điều khiển</h1>
+      <div class="right">
+        <span class="badge badge-success" id="live"><i class="dot"></i>Trực tiếp</span>
+        <button class="btn btn-ghost btn-sm" id="refresh">Làm mới</button>
+      </div>
+    </div>
+    <main class="adm-main" id="main"></main>
+  </div>
+</div>
+<div class="drawer-back" id="dbk"></div>
+<aside class="drawer" id="drawer"></aside>
+
+<script src="/js/api.js"></script>
+<script src="/js/ui.js"></script>
+<script src="/js/admin.js"></script>
+</body>
+</html>

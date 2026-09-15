@@ -1,0 +1,35 @@
+{
+  "name": "lakstay-booking-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LakStay — Hệ thống đặt phòng khách sạn (Hotel Booking System) thể hiện tư duy backend: concurrency, state machine, transaction, RBAC, payment QR VietQR.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "setup": "npm run db:init && npm run db:seed",
+    "db:init": "node db/init.js",
+    "db:seed": "node db/seed.js",
+    "db:reset": "node db/init.js --fresh && node db/seed.js",
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test tests/unit.test.js",
+    "test:smoke": "node tests/smoke.js",
+    "test:concurrency": "node tests/concurrency.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "cookie-parser": "^1.4.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pdfkit": "^0.20.2",
+    "qrcode": "^1.5.4",
+    "zod": "^3.23.8"
+  }
+}

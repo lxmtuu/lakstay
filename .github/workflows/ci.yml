@@ -1,0 +1,100 @@
+# ============================================================================
+#  CI — mỗi push/PR chạy trên CẢ Ubuntu lẫn Windows:
+#    guard đường dẫn → unit → smoke (server thật) → concurrency (40 racers)
+#  Job Docker riêng build + boot image kèm healthcheck.
+#  Matrix Windows tồn tại để chặn hồi quy kiểu "new URL().pathname" (bug C:\C:\...).
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+defaults:
+  run:
+    shell: bash   # thống nhất bash trên cả windows-latest (Git Bash có sẵn)
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      NODE_ENV: test
+      JWT_ACCESS_SECRET: ci-access-secret-not-for-prod
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-for-prod
+      PAYMENT_WEBHOOK_SECRET: ci-webhook-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Guard — cấm dùng URL.pathname cho đường dẫn file (bug Windows C:\\C:\\...)
+        run: |
+          if grep -rn "import.meta.url).pathname" src db 2>/dev/null; then
+            echo "::error::Phát hiện .pathname của import.meta.url — dùng fromHere() trong src/utils/paths.js"
+            exit 1
+          fi
+          echo "path guard OK"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Dependency audit (high+ only, không chặn)
+        run: npm audit --audit-level=high || true
+
+      - name: Init + seed database
+        run: |
+          npm run db:init
+          npm run db:seed
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Start server (background) + chờ healthz
+        run: |
+          node src/server.js > server.log 2>&1 &
+          for i in $(seq 1 40); do
+            curl -sf http://localhost:3000/healthz && echo " server up" && break
+            sleep 1
+          done
+
+      - name: Smoke tests (86 checks end-to-end)
+        run: npm run test:smoke
+
+      - name: Concurrency tests (40 racers / 1 phòng)
+        run: RACERS=40 npm run test:concurrency
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log-${{ matrix.os }}
+          path: server.log
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t lakstay:ci .
+      - name: Boot container + healthcheck
+        run: |
+          docker run -d --name lakstay -p 3000:3000 \
+            -e JWT_ACCESS_SECRET=ci-secret -e JWT_REFRESH_SECRET=ci-secret2 \
+            -e PAYMENT_WEBHOOK_SECRET=ci-secret3 \
+            lakstay:ci
+          sleep 5
+          docker exec lakstay node db/init.js
+          docker exec lakstay node db/seed.js
+          docker restart lakstay
+          sleep 4
+          curl -sf http://localhost:3000/healthz

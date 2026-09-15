@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LakStay Đà Lạt — Đặt phòng nghỉ dưỡng giữa rừng thông</title>
+<meta name="description" content="LakStay — khách sạn boutique 5 sao giữa rừng thông Đà Lạt. Đặt phòng trực tuyến, thanh toán VietQR, huỷ linh hoạt, xác nhận tức thì.">
+<meta name="theme-color" content="#0c3527">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%230c3527'/><path d='M5 19h14M7 19V10l5-4.5L17 10v9M10 19v-5h4v5' stroke='%23e3c47e' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<a class="sr" href="#main">Bỏ qua tới nội dung</a>
+
+<header class="site-header on-dark" id="header">
+  <div class="wrap">
+    <a class="brand" href="#/" aria-label="LakStay trang chủ">
+      <span class="mark" data-icon="logo"></span>
+      <span>LakStay<small>Đà Lạt</small></span>
+    </a>
+    <nav class="nav" id="nav" aria-label="Điều hướng chính">
+      <a href="#/" data-route="" data-i18n="nav.home">Trang chủ</a>
+      <a href="#/rooms" data-route="rooms" data-i18n="nav.rooms">Phòng &amp; Giá</a>
+      <a href="#/experience" data-route="experience" data-i18n="nav.exp">Trải nghiệm</a>
+      <a href="#/my-bookings" data-route="my-bookings" data-i18n="nav.mybookings">Đặt phòng của tôi</a>
+    </nav>
+    <div class="header-actions">
+      <div class="lang-sw" id="lang-sw" role="group" aria-label="Language" style="display:flex;border:1px solid rgba(128,128,128,.35);border-radius:99px;overflow:hidden;margin-right:10px">
+        <button data-l="vi" style="padding:5px 10px;font-size:11.5px;font-weight:800;background:transparent;border:0;cursor:pointer;color:inherit">VI</button>
+        <button data-l="en" style="padding:5px 10px;font-size:11.5px;font-weight:800;background:transparent;border:0;cursor:pointer;color:inherit">EN</button>
+      </div>
+      <div id="auth-area"></div>
+      <button class="burger" id="burger" aria-label="Mở menu"><span></span><span></span><span></span></button>
+    </div>
+  </div>
+</header>
+
+<main id="main"></main>
+
+<footer class="site-footer" id="footer"></footer>
+
+<noscript>
+  <div style="padding:40px;text-align:center;font-family:sans-serif">
+    LakStay cần bật JavaScript để hoạt động. Vui lòng bật JavaScript và tải lại trang.
+  </div>
+</noscript>
+
+<script src="/js/api.js"></script>
+<script src="/js/ui.js"></script>
+<script src="/js/i18n.js"></script>
+<script src="/js/components.js"></script>
+<script src="/js/pages-guest.js"></script>
+<script src="/js/pages-booking.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

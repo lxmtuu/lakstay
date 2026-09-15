@@ -1,0 +1,42 @@
+# Chạy toàn bộ hệ thống bằng 1 lệnh:  docker compose up --build
+# Dữ liệu SQLite nằm trong volume `lakstay-data` => không mất khi rebuild image.
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET trong .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET trong .env}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?set PAYMENT_WEBHOOK_SECRET trong .env}
+      BANK_BIN: ${BANK_BIN:-970436}
+      BANK_ACCOUNT: ${BANK_ACCOUNT:-1018734562}
+      BANK_ACCOUNT_NAME: ${BANK_ACCOUNT_NAME:-LAKSTAY HOTEL JSC}
+      # Tuỳ chọn SMTP thật (bỏ trống thì email ghi vào outbox trong container)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+    volumes:
+      - lakstay-data:/app/src/data
+    restart: unless-stopped
+
+  # Lần đầu cần tạo schema + seed: chạy 1 lần rồi tắt
+  seed:
+    build: .
+    command: sh -c "node db/init.js && node db/seed.js"
+    environment:
+      NODE_ENV: production
+      JWT_ACCESS_SECRET: seed-only
+      JWT_REFRESH_SECRET: seed-only
+      PAYMENT_WEBHOOK_SECRET: seed-only
+    volumes:
+      - lakstay-data:/app/src/data
+    profiles: ["init"]
+
+volumes:
+  lakstay-data:
