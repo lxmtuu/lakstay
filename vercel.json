@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
   "functions": {
     "api/index.js": {
       "maxDuration": 30,
@@ -7,8 +8,8 @@
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/verify/(.*)", "destination": "/api/index" },
-    { "source": "/healthz", "destination": "/api/index" }
+    { "source": "/api/:path*", "destination": "/api/index?__path=/api/:path*" },
+    { "source": "/verify/:code", "destination": "/api/index?__path=/verify/:code" },
+    { "source": "/healthz", "destination": "/api/index?__path=/healthz" }
   ]
 }

@@ -24,6 +24,7 @@ export function createApp() {
   app.disable('x-powered-by');
 
   /* ---------------- SECURITY HEADERS ---------------- */
+  const allowIframePreview = process.env.ALLOW_IFRAME_PREVIEW === '1';
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
@@ -34,13 +35,14 @@ export function createApp() {
         imgSrc: ["'self'", 'data:', 'blob:', 'https://img.vietqr.io', 'https://images.unsplash.com'],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
-        frameAncestors: ["'self'"],
+        frameAncestors: allowIframePreview ? ["'self'", 'https:'] : ["'self'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
       },
     },
+    frameguard: allowIframePreview ? false : { action: 'sameorigin' },
     crossOriginEmbedderPolicy: false,
-    crossOriginResourcePolicy: { policy: 'same-site' },
+    crossOriginResourcePolicy: { policy: allowIframePreview ? 'cross-origin' : 'same-site' },
     referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   }));
 
