@@ -7,70 +7,78 @@
  * trực tiếp các service thật (createBooking, handlePaymentSuccess...).
  * => Dữ liệu seed luôn nhất quán với logic nghiệp vụ, không "làm giả" bằng INSERT tay.
  */
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { db, initSchema } from '../src/db.js';
 import { createBooking, transitionBooking } from '../src/services/booking.service.js';
 import { createPayment, handlePaymentSuccess } from '../src/services/payment.service.js';
 import { newId } from '../src/utils/id.js';
-
-initSchema();
+import { todayISO, addDays as addDaysISO } from '../src/utils/date.js';
 
 const id = (p, i) => `${p}_seed_${String(i).padStart(3, '0')}`;
-const iso = (d) => d.toISOString().slice(0, 10);
-const addDays = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+const addDays = (n) => addDaysISO(todayISO(), n);
 
 /* ===================== ROOM TYPES ===================== */
 const ROOM_TYPES = [
   {
-    slug: 'standard-pine', name: 'Standard Pine', nameVi: 'Phòng Standard Thông Xanh',
-    description: 'Phòng ấm cúng 20m² hướng vườn thông, phù hợp cặp đôi hoặc khách đi công tác ngắn ngày. Đầy đủ tiện nghi cơ bản, nước nóng 24/7, minibar.',
-    capacity: 2, bed: '1 giường đôi 1m6', size: 20, price: 890_000, rooms: 8, floors: [1, 2],
-    amenities: ['Wifi tốc độ cao', 'TV 43"', 'Điều hoà 2 chiều', 'Nước nóng', 'Minibar', 'Bàn làm việc', 'Ấm siêu tốc', 'Máy sấy tóc'],
-    images: ['/img/room-standard.jpg'],
+    slug: 'standard-pine', name: 'Superior Cozy Double', nameVi: 'Phòng Superior Đôi Ấm Cúng',
+    description: 'Không gian 20m² ấm cúng với tông gỗ sáng kết hợp vách lam gỗ và vân đá tự nhiên. Trang bị giường đôi 1m8 đầu giường bọc da êm ái, bàn trang điểm gương tròn LED cảm ứng và đầy đủ tiện nghi cho cặp đôi hoặc khách công tác.',
+    descriptionEn: 'Warm 20m² room crafted in light oak, slatted wood panelling and natural stone accents, featuring a plush 1.8m double bed, touch-lit round vanity desk and full modern amenities.',
+    capacity: 2, bed: '1 giường đôi 1m8', size: 20, price: 890_000, rooms: 8, floors: [1, 2],
+    amenities: ['Wifi tốc độ cao', 'Điều hoà âm trần', 'Bàn trang điểm gương LED', 'Nước nóng 24/7', 'Minibar', 'Ấm siêu tốc', 'Máy sấy tóc', 'Khóa thẻ từ'],
+    images: ['/img/room-standard.jpg', '/img/rooms/double-4.jpg', '/img/rooms/double-3.jpg', '/img/rooms/superior-1.jpg'],
   },
   {
-    slug: 'deluxe-valley', name: 'Deluxe Valley', nameVi: 'Phòng Deluxe Thung Lũng',
-    description: 'Phòng 28m² ban công riêng nhìn xuống thung lũng đèn lung linh về đêm. Giường king-size, bồn tắm nằm, bộ amenities cao cấp.',
-    capacity: 2, bed: '1 giường King 1m8', size: 28, price: 1_390_000, rooms: 10, floors: [2, 3, 4],
-    amenities: ['Ban công riêng', 'View thung lũng', 'Wifi tốc độ cao', 'TV 50"', 'Bồn tắm nằm', 'Minibar', 'Áo choàng tắm', 'Két sắt', 'Trà & cà phê'],
-    images: ['/img/room-deluxe.jpg'],
+    slug: 'deluxe-valley', name: 'Deluxe Double with Balcony', nameVi: 'Phòng Deluxe Ban Công',
+    description: 'Phòng 26m² thoáng sáng với hệ cửa kính sát trần phủ rèm voan trắng mở ra ban công đón nắng sớm Đà Lạt. Có bộ bàn trà gỗ đôi cạnh cửa sổ, tủ âm tường cỡ lớn và phòng tắm riêng tích hợp bồn tắm nằm thư giãn.',
+    descriptionEn: 'Sunlit 26m² deluxe room with floor-to-ceiling sheer-curtained glass doors opening onto a breezy balcony, complete with a wooden tea set for two and a private soaking bathtub.',
+    capacity: 2, bed: '1 giường đôi 1m8', size: 26, price: 1_390_000, rooms: 10, floors: [2, 3],
+    amenities: ['Ban công riêng', 'Bồn tắm nằm', 'Bàn trà đôi cạnh cửa sổ', 'Wifi tốc độ cao', 'TV thông minh', 'Điều hoà âm trần', 'Minibar', 'Khóa thẻ từ', 'Trà & cà phê'],
+    images: ['/img/room-deluxe.jpg', '/img/rooms/balcony-1.jpg', '/img/rooms/balcony-3.jpg', '/img/rooms/balcony-4.jpg'],
   },
   {
-    slug: 'premium-garden', name: 'Premium Garden', nameVi: 'Phòng Premium Sân Vườn',
-    description: 'Phòng 32m² tầng trệt có lối đi riêng ra sân vườn hoa cẩm tú cầu. Phù hợp gia đình có trẻ nhỏ hoặc người lớn tuổi.',
-    capacity: 3, bed: '1 giường King + 1 sofa bed', size: 32, price: 1_790_000, rooms: 6, floors: [1],
-    amenities: ['Sân vườn riêng', 'Lối đi riêng', 'Wifi tốc độ cao', 'TV 55"', 'Bồn tắm nằm', 'Minibar', 'Két sắt', 'Bàn ủi', 'Miễn phí trẻ dưới 6 tuổi'],
-    images: ['/img/room-premium.jpg'],
+    slug: 'premium-garden', name: 'Premium Garden Bathtub', nameVi: 'Phòng Premium Bồn Tắm Hướng Vườn',
+    description: 'Phòng nghỉ 32m² ngập tràn ánh sáng tự nhiên với khung cửa sổ đôi nhìn ra rặng cây xanh mát và ban công lan can sắt cổ điển. Điểm nhấn là không gian phòng tắm mở có bồn tắm nằm đặt ngay cạnh cửa sổ để ngâm mình thư giãn.',
+    descriptionEn: 'Light-filled 32m² retreat overlooking lush greenery with a wrought-iron balcony, dual window-side desk and an open-plan bathroom featuring a soaking tub right beside the window.',
+    capacity: 3, bed: '1 giường đôi 1m8', size: 32, price: 1_790_000, rooms: 6, floors: [2, 3],
+    amenities: ['Hướng vườn cây xanh', 'Bồn tắm nằm cạnh cửa sổ', 'Ban công riêng', 'Bàn làm việc hướng vườn', 'Wifi tốc độ cao', 'TV 50"', 'Điều hoà âm trần', 'Minibar', 'Trà & cà phê'],
+    images: ['/img/room-premium.jpg', '/img/rooms/garden-suite-3.jpg', '/img/rooms/bathtub-1.jpg', '/img/rooms/bathtub-2.jpg'],
   },
   {
-    slug: 'family-suite', name: 'Family Suite', nameVi: 'Suite Gia Đình',
-    description: 'Suite 45m² gồm 2 phòng ngủ thông nhau, phòng khách riêng và khu bếp nhỏ. Sức chứa 4 người lớn + 2 trẻ em.',
-    capacity: 6, bed: '2 giường King + 2 giường đơn', size: 45, price: 2_690_000, rooms: 5, floors: [3, 4],
-    amenities: ['2 phòng ngủ', 'Phòng khách riêng', 'Bếp nhỏ', 'Wifi tốc độ cao', 'TV 65"', '2 phòng tắm', 'Máy giặt', 'Bàn ăn 6 người', 'View thành phố'],
-    images: ['/img/room-family.jpg'],
+    slug: 'family-suite', name: 'Family Room with Balcony', nameVi: 'Phòng Gia Đình Ban Công',
+    description: 'Phòng gia đình rộng 35m² bố trí 2 giường đôi 1m8 êm ái cho 4 người lớn và trẻ nhỏ. Trang bị hệ tủ gỗ kịch trần nhiều ngăn, bàn trang điểm dài kèm gương LED, ban công thoáng gió và phòng tắm có bồn tắm nằm.',
+    descriptionEn: 'Spacious 35m² family room with two plush 1.8m double beds, full-height multi-bay wooden wardrobes, an extended LED vanity desk, airy balcony and a bathroom with soaking tub.',
+    capacity: 4, bed: '2 giường đôi 1m8', size: 35, price: 2_290_000, rooms: 5, floors: [2, 3, 4],
+    amenities: ['2 giường đôi 1m8', 'Ban công riêng', 'Bồn tắm nằm', 'Hệ tủ gỗ kịch trần', 'Bàn trang điểm gương LED', 'Wifi tốc độ cao', 'TV 55"', 'Điều hoà âm trần', 'Minibar'],
+    images: ['/img/room-family.jpg', '/img/rooms/family-balcony-1.jpg', '/img/rooms/family-balcony-4.jpg', '/img/rooms/family-window-1.jpg'],
   },
   {
-    slug: 'executive-lake', name: 'Executive Lake View', nameVi: 'Executive Hồ View',
-    description: 'Phòng 38m² tầng cao với cửa kính trần nhìn thẳng hồ Xuân Hương. Dành cho khách doanh nhân, kèm quyền sử dụng Executive Lounge.',
-    capacity: 2, bed: '1 giường King 2m', size: 38, price: 3_290_000, rooms: 4, floors: [5, 6],
-    amenities: ['View hồ Xuân Hương', 'Executive Lounge', 'Wifi tốc độ cao', 'TV 65"', 'Bồn tắm Jacuzzi', 'Máy pha cà phê', 'Két sắt laptop', 'Bàn làm việc lớn', 'Đưa đón sân bay'],
-    images: ['/img/room-executive.jpg'],
+    slug: 'executive-lake', name: 'Deluxe Lake & Town Suite', nameVi: 'Deluxe Suite Ban Công Hướng Hồ',
+    description: 'Suite góc rộng 45m² mang phong cách cổ điển ấm lịch lãm với gỗ trầm, ghế sofa da Chesterfield tiếp khách, hệ tủ kính trưng bày và bàn làm việc riêng. Ban công sắt mỹ thuật mở ra tầm nhìn thoáng đãng về phía Hồ Xuân Hương và mái ngói phố núi.',
+    descriptionEn: 'Elegant 45m² corner suite dressed in dark walnut, featuring a classic Chesterfield leather sofa, glass display cabinet, dedicated work desk and a wrought-iron balcony overlooking Xuan Huong Lake and hillside villas.',
+    capacity: 2, bed: '1 giường King 1m8 + Sofa da', size: 45, price: 2_890_000, rooms: 4, floors: [4, 5],
+    amenities: ['View hồ Xuân Hương', 'Ban công sắt mỹ thuật', 'Sofa da Chesterfield', 'Bàn làm việc riêng', 'Tủ rượu cánh kính', 'Wifi tốc độ cao', 'TV 55"', 'Điều hoà âm trần', 'Minibar'],
+    images: ['/img/room-executive.jpg', '/img/rooms/suite-balcony-4.jpg', '/img/rooms/suite-balcony-3.jpg', '/img/rooms/deluxe-window-2.jpg'],
   },
   {
-    slug: 'presidential-villa', name: 'Presidential Villa', nameVi: 'Biệt Thự Tổng Thống',
-    description: 'Biệt thự biệt lập 120m² với hồ bơi nước ấm riêng, sân BBQ, quản gia 24/7. Trải nghiệm cao cấp nhất tại LakStay Đà Lạt.',
-    capacity: 8, bed: '3 phòng ngủ King', size: 120, price: 8_900_000, rooms: 2, floors: [0],
-    amenities: ['Hồ bơi nước ấm riêng', 'Sân BBQ', 'Quản gia 24/7', '3 phòng ngủ', 'Phòng khách 40m²', 'Bếp đầy đủ', 'Rạp phim mini', 'Xe đưa đón riêng', 'Spa tại phòng'],
-    images: ['/img/room-villa.jpg'],
+    slug: 'presidential-villa', name: 'Grand Pine Forest Suite', nameVi: 'Grand Suite Bồn Tắm Rừng Thông',
+    description: 'Hạng Suite cao cấp nhất rộng 52m² nổi bật với vách đá cẩm thạch hắt sáng, 2 giường đôi 1m8 êm ái và hệ cửa kính góc toàn cảnh. Đặc biệt sở hữu bồn tắm nằm lớn đặt ngay khung cửa sổ mở thẳng ra rặng thông xanh rì đặc trưng của Đà Lạt.',
+    descriptionEn: 'Our signature 52m² flagship suite highlighted by a backlit marble feature wall, two luxury 1.8m double beds, panoramic corner windows and a statement soaking tub looking straight into Da Lat’s lush pine forest.',
+    capacity: 4, bed: '2 giường đôi 1m8 cao cấp', size: 52, price: 3_690_000, rooms: 2, floors: [4, 5],
+    amenities: ['View rừng thông toàn cảnh', 'Bồn tắm panorama rừng thông', '2 giường đôi 1m8', 'Vách đá cẩm thạch hắt sáng', 'Ban công góc rộng', 'Bàn trà đôi đón nắng', 'Wifi tốc độ cao', 'TV 65"', 'Điều hoà âm trần'],
+    images: ['/img/room-villa.jpg', '/img/rooms/family-garden-1.jpg', '/img/rooms/family-garden-4.jpg', '/img/rooms/bathtub-3.jpg'],
   },
 ];
 
+export async function seedDatabase({ silent = false } = {}) {
+initSchema();
 const insRoomType = db.prepare(`
   INSERT OR REPLACE INTO room_types
-  (id, slug, name, name_vi, description, capacity, bed_type, size_m2, base_price, total_rooms,
+  (id, slug, name, name_vi, description, description_en, capacity, bed_type, size_m2, base_price, total_rooms,
    amenities, images, cancel_free_hours, cancel_penalty_pct, cancel_no_refund_hours,
    min_stay, max_stay, max_advance_days, is_active)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`);
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`);
 const insRoom = db.prepare(`INSERT OR REPLACE INTO rooms (id, room_type_id, room_number, floor, status) VALUES (?,?,?,?,?)`);
 
 ROOM_TYPES.forEach((rt, idx) => {
@@ -81,7 +89,7 @@ ROOM_TYPES.forEach((rt, idx) => {
       ? { free: 48, penalty: 50, norefund: 24, min: 1 }
       : { free: 24, penalty: 50, norefund: 6, min: 1 };
 
-  insRoomType.run(rtId, rt.slug, rt.name, rt.nameVi, rt.description, rt.capacity, rt.bed, rt.size,
+  insRoomType.run(rtId, rt.slug, rt.name, rt.nameVi, rt.description, rt.descriptionEn, rt.capacity, rt.bed, rt.size,
     rt.price, rt.rooms, JSON.stringify(rt.amenities), JSON.stringify(rt.images),
     policy.free, policy.penalty, policy.norefund, policy.min, 30, 365);
 
@@ -96,6 +104,9 @@ ROOM_TYPES.forEach((rt, idx) => {
 });
 
 /* ===================== PRICE RULES ===================== */
+// Ghi chú: phụ thu cuối tuần (T6/T7/CN) đã do pricing.service.js tính theo WEEKEND_SURCHARGE_PCT,
+// nên chỉ seed các rule theo mùa lễ để tránh nhân đôi phụ thu cuối tuần.
+db.prepare(`DELETE FROM price_rules WHERE id LIKE 'pr_seed_%'`).run();
 const insRule = db.prepare(`
   INSERT OR REPLACE INTO price_rules (id, room_type_id, name, start_date, end_date, multiplier, priority, days_of_week)
   VALUES (?,?,?,?,?,?,?,?)`);
@@ -105,7 +116,6 @@ const SEASONS = [
   { name: 'Lễ Giáng sinh', start: `${year}-12-20`, end: `${year}-12-27`, mult: 1.35 },
   { name: 'Tết Dương lịch', start: `${year}-12-28`, end: `${year + 1}-01-02`, mult: 1.5 },
   { name: 'Mùa mai anh đào', start: `${year + 1}-01-10`, end: `${year + 1}-02-10`, mult: 1.25 },
-  { name: 'Cuối tuần', start: `${year}-01-01`, end: `${year + 1}-12-31`, mult: 1.15, dow: [5, 6, 0] },
 ];
 let ruleIdx = 0;
 ROOM_TYPES.forEach((rt, rtIdx) => {
@@ -148,13 +158,11 @@ insCoupon.run(id('cpn', 4), 'HETHANG', 'PERCENT', 50, 300_000, 500_000, stamp(-6
 
 /* ===================== SAMPLE BOOKINGS (qua service thật) ===================== */
 const SAMPLES = [
-  { u: 4, offset: -25, nights: 2, rt: 2, qty: 1, guests: 2, coupon: null,         pay: true,  then: 'COMPLETED' },
-  { u: 5, offset: -14, nights: 3, rt: 4, qty: 1, guests: 4, coupon: 'DALAT10',    pay: true,  then: 'COMPLETED' },
   { u: 6, offset: 2,   nights: 2, rt: 2, qty: 1, guests: 2, coupon: null,         pay: true,  then: 'CONFIRMED' },
   { u: 4, offset: 6,   nights: 3, rt: 3, qty: 2, guests: 4, coupon: 'WELCOME200K',pay: true,  then: 'CONFIRMED' },
   { u: 5, offset: 11,  nights: 1, rt: 1, qty: 1, guests: 2, coupon: null,         pay: false, then: 'PENDING' },
   { u: 6, offset: 18,  nights: 4, rt: 5, qty: 1, guests: 2, coupon: null,         pay: true,  then: 'CONFIRMED' },
-  { u: 4, offset: 30,  nights: 2, rt: 6, qty: 1, guests: 6, coupon: 'MUAHE15',    pay: true,  then: 'CONFIRMED' },
+  { u: 4, offset: 30,  nights: 2, rt: 6, qty: 1, guests: 4, coupon: 'MUAHE15',    pay: true,  then: 'CONFIRMED' },
 ];
 
 const made = [];
@@ -219,8 +227,8 @@ const HISTORY = [
   { u: 5, offset: -38, nights: 3, rt: 3, qty: 1, guests: 3 },
   { u: 6, offset: -30, nights: 1, rt: 2, qty: 1, guests: 2 },
   { u: 4, offset: -22, nights: 4, rt: 5, qty: 1, guests: 2 },
-  { u: 5, offset: -15, nights: 2, rt: 4, qty: 1, guests: 5 },
-  { u: 6, offset: -9,  nights: 2, rt: 6, qty: 1, guests: 7 },
+  { u: 5, offset: -15, nights: 2, rt: 4, qty: 1, guests: 4 },
+  { u: 6, offset: -9,  nights: 2, rt: 6, qty: 1, guests: 4 },
   { u: 4, offset: -5,  nights: 3, rt: 2, qty: 2, guests: 4 },
   { u: 5, offset: -2,  nights: 1, rt: 1, qty: 1, guests: 1 },
 ];
@@ -261,13 +269,13 @@ const insReview = db.prepare(`
   INSERT INTO reviews (id, booking_id, user_id, room_type_id, rating, title, content, is_approved, created_at)
   VALUES (?,?,?,?,?,?,?,?,?)`);
 const REVIEWS = [
-  { r: 5, t: 'Tuyệt vời, sẽ quay lại', c: 'Phòng sạch sẽ, view thông xanh rất thơ. Nhân viên nhiệt tình, check-in nhanh gọn. Bữa sáng buffet đa dạng, có cả bánh mì xíu mại đặc sản Đà Lạt.' },
-  { r: 4, t: 'Rất đáng tiền', c: 'Vị trí thuận tiện, cách chợ đêm Đà Lạt chỉ 5 phút đi bộ. Phòng rộng và ấm áp. Điểm trừ nhỏ là wifi tầng 1 hơi yếu vào buổi tối.' },
-  { r: 5, t: 'Suite gia đình quá ổn', c: 'Đặt suite cho 5 người, có bếp nhỏ nên rất tiện khi đi cùng trẻ con. Các bé thích mê khu sân vườn hoa cẩm tú cầu.' },
-  { r: 4, t: 'View hồ đẹp mê', c: 'Phòng Executive nhìn thẳng hồ Xuân Hương, sáng dậy kéo rèm thấy sương mù rất đã. Dịch vụ phòng nhanh, đồ ăn ngon.' },
-  { r: 5, t: 'Villa đáng từng đồng', c: 'Hồ bơi nước ấm giữa trời Đà Lạt 16 độ là trải nghiệm không quên. Quản gia hỗ trợ tận tình từ đặt xe đến gợi ý quán ăn.' },
-  { r: 3, t: 'Ổn nhưng cần cải thiện', c: 'Phòng cơ bản ổn, đúng tầm giá. Tuy nhiên cách âm chưa tốt, nghe được tiếng hành lang buổi sáng. Nhân viên có hỗ trợ đổi phòng.' },
-  { r: 5, t: 'Kỳ nghỉ hoàn hảo', c: 'Lần thứ 3 ở LakStay và vẫn rất hài lòng. Giá mùa mai anh đào cao hơn chút nhưng hoàn toàn xứng đáng với chất lượng.' },
+  { r: 5, t: 'Phòng gỗ ấm áp, y hệt ảnh chụp', c: 'Phòng ốp gỗ sáng rất sạch và ấm, gương tròn cảm ứng đẹp, giường 1m8 êm. Nhân viên nhiệt tình, check-in nhanh gọn.' },
+  { r: 4, t: 'Bồn tắm hướng vườn cực thư giãn', c: 'Thích nhất là bồn tắm nằm ngay cạnh cửa sổ nhìn ra mảng cây xanh bên ngoài. Vị trí thuận tiện đi dạo phố núi buổi tối.' },
+  { r: 5, t: 'Ban công đón nắng sáng rất thơ', c: 'Ngồi uống trà bên bộ bàn gỗ cạnh rèm voan trắng buổi sáng rất chill. Phòng Deluxe rộng rãi, nước nóng mạnh.' },
+  { r: 5, t: 'Ban công nhìn ra Hồ Xuân Hương đẹp mê', c: 'Phòng Deluxe Suite có sofa da ngồi đọc sách cực thích, bước ra ban công là thấy mặt nước Hồ Xuân Hương và mái ngói Đà Lạt.' },
+  { r: 5, t: 'Phòng gia đình 2 giường 1m8 quá thoải mái', c: 'Đi gia đình 4 người ở phòng 2 giường đôi 1m8 rất rộng, hệ tủ gỗ kịch trần để đồ thoải mái, phòng tắm có cả bồn tắm nằm.' },
+  { r: 5, t: 'Grand Suite nhìn thẳng rừng thông xuất sắc', c: 'Ấn tượng nhất là bồn tắm nằm sát khung kính lớn mở thẳng ra rặng thông xanh ngắt và vách đá cẩm thạch sang trọng.' },
+  { r: 4, t: 'Kỳ nghỉ trọn vẹn tại Đà Lạt', c: 'Lần thứ 2 quay lại LakStay và vẫn rất hài lòng từ chất lượng phòng ốc đúng ảnh thực tế đến sự chu đáo của lễ tân.' },
 ];
 // Booking cuối cùng giữ lại để làm review "chờ duyệt" (demo tính năng moderation)
 const reviewed = histMade.slice(0, -1);
@@ -289,8 +297,9 @@ insAudit.run(newId('aud'), id('usr', 1), 'admin', 'SYSTEM_SEEDED', 'system', nul
   JSON.stringify({ bookings: made.length }), stamp(0));
 
 /* ===================== SUMMARY ===================== */
-const count = (t) => db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n;
-console.log(`
+if (!silent) {
+  const count = (t) => db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n;
+  console.log(`
 ╔═══════════════════════════════════════════════════════════════════╗
 ║  ✓ SEED HOÀN TẤT                                                  ║
 ╚═══════════════════════════════════════════════════════════════════╝
@@ -315,4 +324,11 @@ console.log(`
   ── BOOKING MẪU ───────────────────────────────────────────────────
 ${made.map((m) => `    ${m.code}  ${m.status.padEnd(10)} ${m.checkIn}  ${m.total.toLocaleString('vi-VN')}₫`).join('\n')}
 `);
-db.close();
+}
+}
+
+const isDirectRun = Boolean(process.argv[1]) && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+if (isDirectRun) {
+  await seedDatabase();
+  db.close();
+}

@@ -1,15 +1,13 @@
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { config } from '../config/index.js';
+import { fromHere } from '../utils/paths.js';
 import { getBookingById } from './booking.service.js';
 import { STATUS_META } from './booking-state.js';
 import { dmyVN, fmtVND, fmtDateTimeVN } from '../utils/format.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FONT = path.resolve(__dirname, '../assets/fonts/DejaVuSans.ttf');
-const FONT_BOLD = path.resolve(__dirname, '../assets/fonts/DejaVuSans-Bold.ttf');
+const FONT = fromHere(import.meta.url, '..', 'assets', 'fonts', 'DejaVuSans.ttf');
+const FONT_BOLD = fromHere(import.meta.url, '..', 'assets', 'fonts', 'DejaVuSans-Bold.ttf');
 
 /* Màu thương hiệu (RGB) */
 const PINE = [12, 53, 39];

@@ -49,7 +49,12 @@ const API = (() => {
       let data;
       try { data = await res.json(); } catch { data = { success: false, error: { code: 'PARSE_ERROR', message: 'Phản hồi không hợp lệ' } }; }
 
-      if (res.ok) return data.data ?? data;
+      if (res.ok) {
+        if (data && data.meta && data.data && typeof data.data === 'object' && !Array.isArray(data.data) && !('meta' in data.data)) {
+          return { ...data.data, meta: data.meta };
+        }
+        return data.data ?? data;
+      }
 
       // Hết phiên => thử refresh 1 lần rồi gọi lại
       if (res.status === 401 && data.error?.code === 'TOKEN_EXPIRED' && attempt === 0) {

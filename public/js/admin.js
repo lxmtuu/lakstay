@@ -293,8 +293,17 @@
         catch (e) { UI.errToast(e); }
         return;
       }
-      const labels = { CONFIRMED: 'xác nhận', CHECKED_IN: 'check-in', COMPLETED: 'check-out', CANCELLED: 'huỷ', NO_SHOW: 'no-show' };
-      if (!await UI.confirmDialog({ title: 'Đổi trạng thái', message: `Chuyển đơn ${b.code} sang "${labels[a]}"?`, confirmText: 'Thực hiện', danger: ['CANCELLED', 'NO_SHOW'].includes(a) })) return;
+      if (a === 'CANCELLED') {
+        if (!await UI.confirmDialog({ title: 'Huỷ đặt phòng', message: `Huỷ đơn ${b.code} và áp dụng chính sách hoàn tiền / thu hồi điểm tự động?`, confirmText: 'Xác nhận huỷ', danger: true })) return;
+        try {
+          const res = await API.post(`/api/bookings/${b.id}/cancel`, { reason: 'Huỷ từ trang quản trị' });
+          UI.toast(res.refund?.eligible ? `Đã huỷ và hoàn ${UI.vnd(res.refund.refund_amount)}` : 'Đã huỷ đặt phòng', 'success');
+          openBookingDrawer(b.id); route(true);
+        } catch (e) { UI.errToast(e); }
+        return;
+      }
+      const labels = { CONFIRMED: 'xác nhận', CHECKED_IN: 'check-in', COMPLETED: 'check-out', NO_SHOW: 'no-show' };
+      if (!await UI.confirmDialog({ title: 'Đổi trạng thái', message: `Chuyển đơn ${b.code} sang "${labels[a]}"?`, confirmText: 'Thực hiện', danger: a === 'NO_SHOW' })) return;
       try {
         await API.post(`/api/admin/bookings/${b.id}/transition`, { to: a, note: 'Thao tác từ trang quản trị' });
         UI.toast('Đã cập nhật trạng thái', 'success');
@@ -471,7 +480,8 @@
         <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
           <div class="field"><label>Tên (EN)</label><input class="input" name="name" value="${UI.esc(t?.name || '')}" required></div>
           <div class="field"><label>Tên (VI)</label><input class="input" name="nameVi" value="${UI.esc(t?.name_vi || '')}" required></div></div>
-        <div class="field"><label>Mô tả</label><textarea class="input" name="description" rows="3">${UI.esc(t?.description || '')}</textarea></div>
+        <div class="field"><label>Mô tả (VI)</label><textarea class="input" name="description" rows="2">${UI.esc(t?.description || '')}</textarea></div>
+        <div class="field"><label>Mô tả (EN)</label><textarea class="input" name="descriptionEn" rows="2">${UI.esc(t?.description_en || '')}</textarea></div>
         <div class="grid" style="grid-template-columns:repeat(4,1fr);gap:12px">
           <div class="field"><label>Khách</label><input class="input" type="number" name="capacity" value="${t?.capacity || 2}"></div>
           <div class="field"><label>m²</label><input class="input" type="number" name="sizeM2" value="${t?.size_m2 || 25}"></div>
@@ -489,7 +499,7 @@
         e.preventDefault();
         const f = Object.fromEntries(new FormData(e.target));
         const body = {
-          name: f.name, nameVi: f.nameVi, description: f.description, capacity: +f.capacity,
+          name: f.name, nameVi: f.nameVi, description: f.description, descriptionEn: f.descriptionEn || undefined, capacity: +f.capacity,
           sizeM2: +f.sizeM2, basePrice: +f.basePrice, bedType: f.bedType,
           cancelFreeHours: +f.cancelFreeHours, cancelPenaltyPct: +f.cancelPenaltyPct, cancelNoRefundHours: +f.cancelNoRefundHours,
           amenities: f.amen.split(',').map((x) => x.trim()).filter(Boolean),
@@ -635,28 +645,58 @@
   }
 
   /* ================= REVIEWS ================= */
-  async function pgReviews(main) {
-    const d = await API.get('/api/reviews', { query: { limit: 30 } });
-    const pending = await API.get('/api/admin/audit-logs', { query: { limit: 1 } }).catch(() => null);
+  async function pgReviews(main, params) {
+    const status = params.status || 'all';
+    const d = await API.get('/api/admin/reviews', { query: { status, limit: 40 } });
     main.innerHTML = `
       <div class="panel">
-        <div class="panel-hd"><h3>Đánh giá đã duyệt</h3><span class="badge badge-muted">${d.summary.count} · TB ${d.summary.average}</span></div>
+        <div class="panel-hd">
+          <h3>Kiểm duyệt đánh giá</h3>
+          <div class="row gap-8">
+            <select class="select" id="rv-st" style="width:auto">
+              <option value="all" ${status === 'all' ? 'selected' : ''}>Tất cả (${d.summary.total})</option>
+              <option value="pending" ${status === 'pending' ? 'selected' : ''}>Chờ duyệt (${d.summary.pending})</option>
+              <option value="approved" ${status === 'approved' ? 'selected' : ''}>Đã duyệt (${d.summary.approved})</option>
+            </select>
+            <span class="badge badge-muted">TB ${d.summary.average ?? '—'} ★</span>
+          </div>
+        </div>
         <div style="display:flex;flex-direction:column;gap:12px">
-          ${d.items.map((r) => `
-            <div style="border:1px solid var(--sand);border-radius:12px;padding:14px">
-              <div class="row" style="justify-content:space-between;gap:10px">
-                <b>${UI.esc(r.full_name)} <span class="stars">${'★'.repeat(r.rating)}</span></b>
-                <span class="tiny muted">${UI.dmy(r.created_at)} · ${UI.esc(r.room_type_name)}</span></div>
+          ${d.items.length ? d.items.map((r) => `
+            <div style="border:1px solid ${r.is_approved ? 'var(--sand)' : 'var(--warn)'};background:${r.is_approved ? 'transparent' : 'var(--warn-bg)'};border-radius:12px;padding:14px">
+              <div class="row" style="justify-content:space-between;gap:10px;flex-wrap:wrap">
+                <b>${UI.esc(r.full_name)} <span class="stars">${'★'.repeat(r.rating)}</span>
+                  <span class="tag ${r.is_approved ? 'info' : 'warn'}" style="margin-left:6px">${r.is_approved ? 'đã duyệt' : 'chờ duyệt'}</span></b>
+                <span class="tiny muted">${UI.dmy(r.created_at)} · ${UI.esc(r.room_type_name)} · <span class="mono">${UI.esc(r.booking_code)}</span></span></div>
+              ${r.title ? `<div class="small" style="font-weight:600;margin-top:4px">${UI.esc(r.title)}</div>` : ''}
               <p class="small" style="margin:6px 0">${UI.esc(r.content)}</p>
-              ${r.owner_reply ? `<div class="tiny" style="background:var(--cream);padding:8px 12px;border-radius:8px"><b>Phản hồi:</b> ${UI.esc(r.owner_reply)}</div>` : `<button class="btn btn-ghost btn-sm" data-rp="${r.id}">Phản hồi</button>`}
-            </div>`).join('')}
+              ${r.owner_reply ? `<div class="tiny" style="background:var(--cream);padding:8px 12px;border-radius:8px;margin-bottom:8px"><b>Phản hồi:</b> ${UI.esc(r.owner_reply)}</div>` : ''}
+              <div class="row gap-8">
+                ${r.is_approved
+                  ? `<button class="btn btn-ghost btn-sm" data-mod="${r.id}|0">Ẩn</button>`
+                  : `<button class="btn btn-primary btn-sm" data-mod="${r.id}|1">Duyệt hiển thị</button>`}
+                ${!r.owner_reply ? `<button class="btn btn-ghost btn-sm" data-rp="${r.id}">Phản hồi</button>` : ''}
+              </div>
+            </div>`).join('') : '<p class="muted small center" style="padding:20px">Không có đánh giá nào.</p>'}
         </div>
       </div>`;
+    $('#rv-st').onchange = () => location.hash = '#/reviews' + ($('#rv-st').value !== 'all' ? `?status=${$('#rv-st').value}` : '');
+    $$('[data-mod]').forEach((b) => b.onclick = async () => {
+      const [id, okFlag] = b.dataset.mod.split('|');
+      try {
+        await API.patch(`/api/reviews/${id}/moderate`, { isApproved: okFlag === '1' });
+        UI.toast(okFlag === '1' ? 'Đã duyệt đánh giá' : 'Đã ẩn đánh giá', 'success');
+        route(true);
+      } catch (e) { UI.errToast(e); }
+    });
     $$('[data-rp]').forEach((b) => b.onclick = () => {
-      const m = UI.modal({ title: 'Phản hồi đánh giá', body: `<form id="f"><div class="field"><label>Nội dung</label><textarea class="input" name="reply" rows="3" required></textarea></div><button class="btn btn-primary" style="margin-top:12px">Gửi</button></form>` });
+      const m = UI.modal({ title: 'Phản hồi đánh giá', body: `<form id="f"><div class="field"><label>Nội dung</label><textarea class="input" name="reply" rows="3" minlength="5" required></textarea></div><button class="btn btn-primary" style="margin-top:12px">Gửi</button></form>` });
       m.$('#f').onsubmit = async (e) => { e.preventDefault();
-        await API.post(`/api/reviews/${b.dataset.rp}/reply`, { reply: m.$('[name=reply]').value });
-        m.close(); UI.toast('Đã gửi phản hồi', 'success'); route(true); };
+        try {
+          await API.post(`/api/reviews/${b.dataset.rp}/reply`, { reply: m.$('[name=reply]').value });
+          m.close(); UI.toast('Đã gửi phản hồi', 'success'); route(true);
+        } catch (er) { UI.errToast(er); }
+      };
     });
   }
 
@@ -854,7 +894,7 @@
         <div class="field"><label>Chi tiêu tích luỹ ± (₫, xét hạng — thường để 0)</label><input class="input" type="number" name="lifetimeSpendDelta" value="0"></div>
         <div class="field"><label>Lý do (bắt buộc, ghi vào audit)</label><input class="input" name="note" minlength="3" required placeholder="VD: đền bù sự cố phòng"></div>
         <button class="btn btn-primary" type="submit">Thực hiện</button></form>` });
-      m.el.querySelector('#f').onsubmit = async (e) => {
+      m.$('#f').onsubmit = async (e) => {
         e.preventDefault();
         const f = Object.fromEntries(new FormData(e.target));
         try {
@@ -872,11 +912,12 @@
   async function pgAudit(main, params) {
     if (ME.user.role !== 'admin') { main.innerHTML = '<div class="panel">Cần quyền admin.</div>'; return; }
     const page = +params.page || 1;
-    const d = await API.get('/api/admin/audit-logs', { query: { page, limit: 40, entityType: params.type || '' } });
+    const action = params.action || '';
+    const d = await API.get('/api/admin/audit-logs', { query: { page, limit: 40, action } });
     main.innerHTML = `
       <div class="panel">
         <div class="filters"><select class="select" id="tp"><option value="">Mọi hành động</option>
-          ${['BOOKING_CREATED', 'BOOKING_CANCELLED', 'PAYMENT_PAID', 'PAYMENT_REFUNDED', 'USER_LOGIN', 'ROOM_TYPE_UPDATED', 'COUPON_CREATED'].map((x) => `<option ${params.type === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+          ${['BOOKING_CREATED', 'BOOKING_CANCELLED_BY_USER', 'BOOKING_CHECKED_IN', 'BOOKING_COMPLETED', 'BOOKING_NO_SHOW', 'PAYMENT_PAID', 'PAYMENT_REFUNDED', 'USER_LOGIN', 'USER_LOGOUT', 'LOYALTY_ADJUSTED', 'ROOM_TYPE_UPDATED', 'COUPON_CREATED'].map((x) => `<option ${action === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
         <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Thời gian</th><th>Hành động</th><th>Người</th><th>Đối tượng</th><th>Chi tiết</th></tr></thead>
         <tbody>${d.items.map((a) => `
           <tr><td class="tiny">${UI.dtVN(a.created_at)}</td><td><span class="tag info">${UI.esc(a.action)}</span></td>
@@ -885,8 +926,8 @@
           <td class="tiny mono" style="max-width:340px;word-break:break-all">${UI.esc(a.after_data || a.before_data || '').slice(0, 120)}</td></tr>`).join('')}</tbody></table></div>
         ${pager(d.meta, page)}
       </div>`;
-    $('#tp').onchange = () => location.hash = '#/audit' + ($('#tp').value ? `?type=${$('#tp').value}` : '');
-    bindPager(d.meta, (p) => location.hash = `#/audit?page=${p}`);
+    $('#tp').onchange = () => location.hash = '#/audit' + ($('#tp').value ? `?action=${$('#tp').value}` : '');
+    bindPager(d.meta, (p) => location.hash = `#/audit?page=${p}${action ? `&action=${encodeURIComponent(action)}` : ''}`);
   }
 
   /* ================= SECURITY ================= */

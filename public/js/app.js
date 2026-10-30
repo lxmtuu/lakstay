@@ -5,7 +5,7 @@
   const ROUTES = {
     '':                (p) => G.home(p),
     'rooms':           (p) => G.rooms(p),
-    'room':            (p, seg) => G.roomDetail(seg[0], p),
+    'room':            (p, seg) => G.roomDetail(seg[1], p),
     'experience':      () => G.experience(),
     'reviews':         (p) => G.reviewsPage(p),
     'write-review':    () => B.reviewsEligible(),
@@ -13,7 +13,7 @@
     'profile':         () => G.profile(),
     'book':            (p) => B.book(p),
     'my-bookings':     (p) => B.myBookings(p),
-    'booking':         (p, seg) => B.bookingDetail(seg[0]),
+    'booking':         (p, seg) => B.bookingDetail(seg[1]),
   };
 
   function parseHash() {

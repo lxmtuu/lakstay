@@ -32,10 +32,11 @@ export function sanitize(obj, blacklist = ['password_hash', 'token_hash', 'faile
 export const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 export function clientIp(req) {
-  const xf = req.headers['x-forwarded-for'];
-  if (typeof xf === 'string' && xf.length) return xf.split(',')[0].trim();
-  return req.socket?.remoteAddress || '-';
+  if (!req) return '-';
+  return req.ip || req.socket?.remoteAddress || '-';
 }
+
+export const escapeLike = (s = '') => String(s).replace(/[%_\\]/g, '\\$&');
 
 export const maskEmail = (e = '') => e.replace(/^(.{2}).*(@.*)$/, '$1***$2');
 export const maskPhone = (p = '') => String(p).replace(/^(\d{2})\d+(\d{3})$/, '$1***$2');

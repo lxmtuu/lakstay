@@ -1,6 +1,6 @@
 import { createApp } from './app.js';
 import { config } from './config/index.js';
-import { initSchema } from './db.js';
+import { db, initSchema } from './db.js';
 import { startJobs } from './jobs.js';
 import { logger } from './utils/logger.js';
 
@@ -32,19 +32,18 @@ const server = app.listen(config.port, config.host, () => {
 const jobs = startJobs();
 
 /* Graceful shutdown — tránh mất dữ liệu / kết nối treo khi deploy lại */
+let shuttingDown = false;
 function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info(`${signal} received — shutting down`);
   jobs.stop();
   server.close(() => {
-    try { require_db_close(); } catch {}
+    try { db.close(); } catch { /* ignore */ }
     logger.info('Server closed');
     process.exit(0);
   });
   setTimeout(() => process.exit(1), 10_000).unref();
-}
-function require_db_close() {
-  // dynamic import để tránh vòng lặp
-  import('./db.js').then(({ db }) => db.close());
 }
 
 ['SIGINT', 'SIGTERM'].forEach((s) => process.on(s, () => shutdown(s)));

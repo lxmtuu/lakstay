@@ -1,5 +1,5 @@
 import { db } from '../db.js';
-import { stayDates, diffDays, isValidDateString, todayISO, addDays, isWeekend } from '../utils/date.js';
+import { stayDates, diffDays, isValidDateString, todayISO, addDays, isWeekend, currentHourVN } from '../utils/date.js';
 import { Errors, BizCode } from '../utils/errors.js';
 
 /**
@@ -30,20 +30,29 @@ export function getInventoryByDate(roomTypeId, checkIn, checkOut) {
   if (!rt) throw Errors.notFound('Loại phòng không tồn tại');
 
   // 1 query cho cả kỳ thay vì N query cho N đêm (tránh N+1)
+  // Chỉ đếm trên các phòng đang mở bán (r.status = 'available') để không trừ trùng với outOfService
   const placeholders = dates.map(() => '?').join(',');
   const rows = db.prepare(`
-    SELECT stay_date, COUNT(*) AS occupied
-    FROM room_calendar
-    WHERE room_type_id = ? AND status IN ${ACTIVE_STATUSES}
-      AND stay_date IN (${placeholders})
-    GROUP BY stay_date
+    SELECT rc.stay_date, COUNT(*) AS occupied
+    FROM room_calendar rc
+    JOIN rooms r ON r.id = rc.room_id
+    WHERE r.room_type_id = ? AND r.status = 'available'
+      AND rc.status IN ${ACTIVE_STATUSES}
+      AND rc.stay_date IN (${placeholders})
+    GROUP BY rc.stay_date
   `).all(roomTypeId, ...dates);
 
-  // Phòng bị BLOCK (bảo trì...) cũng phải trừ khỏi tồn kho
+  // Phòng bị BLOCK theo ngày (trên phòng đang available và chưa nằm trong room_calendar ngày đó)
   const blocked = db.prepare(`
     SELECT rb.block_date, COUNT(*) AS n
     FROM room_blocks rb JOIN rooms r ON r.id = rb.room_id
-    WHERE r.room_type_id = ? AND rb.block_date IN (${placeholders})
+    WHERE r.room_type_id = ? AND r.status = 'available'
+      AND rb.block_date IN (${placeholders})
+      AND NOT EXISTS (
+        SELECT 1 FROM room_calendar rc
+        WHERE rc.room_id = r.id AND rc.stay_date = rb.block_date
+          AND rc.status IN ${ACTIVE_STATUSES}
+      )
     GROUP BY rb.block_date
   `).all(roomTypeId, ...dates);
 
@@ -71,11 +80,31 @@ export function getInventoryByDate(roomTypeId, checkIn, checkOut) {
   });
 }
 
-/** Số phòng còn trống cho CẢ kỳ (min theo đêm) */
+/**
+ * Số phòng vật lý còn trống LIÊN TỤC cho CẢ kỳ [checkIn, checkOut).
+ * Đồng bộ 100% với điều kiện của pickRooms() để không xảy ra trường hợp
+ * tìm kiếm báo "còn 1 phòng" (ghép 2 phòng khác nhau ở 2 đêm) nhưng lúc đặt bị 409.
+ */
 export function countAvailable(roomTypeId, checkIn, checkOut) {
-  const inv = getInventoryByDate(roomTypeId, checkIn, checkOut);
-  if (!inv.length) return 0;
-  return Math.min(...inv.map((i) => i.available));
+  const rt = db.prepare(`SELECT id FROM room_types WHERE id = ? AND is_active = 1`).get(roomTypeId);
+  if (!rt) throw Errors.notFound('Loại phòng không tồn tại');
+  if (!isValidDateString(checkIn) || !isValidDateString(checkOut) || checkOut <= checkIn) return 0;
+
+  return db.prepare(`
+    SELECT COUNT(*) AS n
+    FROM rooms r
+    WHERE r.room_type_id = ? AND r.status = 'available'
+      AND NOT EXISTS (
+        SELECT 1 FROM room_calendar rc
+        WHERE rc.room_id = r.id AND rc.status IN ${ACTIVE_STATUSES}
+          AND rc.stay_date >= ? AND rc.stay_date < ?
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM room_blocks rb
+        WHERE rb.room_id = r.id
+          AND rb.block_date >= ? AND rb.block_date < ?
+      )
+  `).get(roomTypeId, checkIn, checkOut, checkIn, checkOut).n;
 }
 
 /** Tồn kho của TẤT CẢ room types (dùng cho trang search) */
@@ -83,7 +112,7 @@ export function searchAvailability({ checkIn, checkOut, guests = 1 }) {
   const types = db.prepare(`SELECT * FROM room_types WHERE is_active = 1 ORDER BY base_price ASC`).all();
   return types.map((t) => {
     const inventory = getInventoryByDate(t.id, checkIn, checkOut);
-    const available = inventory.length ? Math.min(...inventory.map((i) => i.available)) : 0;
+    const available = inventory.length ? countAvailable(t.id, checkIn, checkOut) : 0;
     return {
       room_type: t,
       inventory,
@@ -177,7 +206,7 @@ export function validateStayDates({ checkIn, checkOut, minStay = 1, maxStay = 30
   }
   // Cho phép đặt "hôm nay" nhưng check-in phải còn trong tương lai gần
   if (checkIn === today) {
-    const hour = new Date().getUTCHours() + 7; // Asia/Ho_Chi_Minh = UTC+7
+    const hour = currentHourVN(); // Asia/Ho_Chi_Minh = UTC+7 (0..23)
     if (hour >= 22) {
       throw Errors.badRequest('Đã quá 22:00, vui lòng chọn ngày nhận phòng khác', { code: BizCode.DATE_INVALID });
     }

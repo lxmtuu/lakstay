@@ -34,8 +34,12 @@ export function errorHandler(err, req, res, _next) {
     details = err.issues.map((i) => ({ field: i.path.join('.'), message: i.message }));
   }
 
-  // SQLite UNIQUE constraint => dịch thành lỗi nghiệp vụ dễ hiểu
-  if (/UNIQUE constraint failed/i.test(message)) {
+  // SQLite UNIQUE / PRIMARY KEY constraint => dịch thành lỗi nghiệp vụ dễ hiểu
+  const isUniqueConstraint =
+    /UNIQUE constraint failed/i.test(message) ||
+    err?.code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+    err?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY';
+  if (isUniqueConstraint) {
     status = 409; code = 'CONFLICT';
     if (/room_calendar/i.test(message)) {
       code = 'ALREADY_BOOKED';
@@ -79,8 +83,12 @@ export function errorHandler(err, req, res, _next) {
 }
 
 /** Request ID + access log */
+const SAFE_REQ_ID = /^[a-zA-Z0-9._-]{1,64}$/;
 export function requestContext(req, res, next) {
-  req.id = req.headers['x-request-id'] || `req_${crypto.randomBytes(8).toString('hex')}`;
+  const incoming = req.headers['x-request-id'];
+  req.id = (typeof incoming === 'string' && SAFE_REQ_ID.test(incoming))
+    ? incoming
+    : `req_${crypto.randomBytes(8).toString('hex')}`;
   res.setHeader('X-Request-Id', req.id);
   const start = process.hrtime.bigint();
   res.on('finish', () => {
@@ -93,12 +101,13 @@ export function requestContext(req, res, next) {
   next();
 }
 
-/** Simple in-memory rate limiter (không cần Redis cho môi trường 1 node) */
+/** Simple in-memory rate limiter (không cần Redis cho môi trường 1 node, có trần RAM chống DoS) */
+const MAX_BUCKETS = 50_000;
 const buckets = new Map();
-setInterval(() => {
-  const now = Date.now();
+function pruneBuckets(now) {
   for (const [k, v] of buckets) if (v.reset < now) buckets.delete(k);
-}, 60_000).unref();
+}
+setInterval(() => pruneBuckets(Date.now()), 60_000).unref();
 
 export function rateLimit({ windowMs, max, keyPrefix = 'global', message } = {}) {
   const win = windowMs || config.rateLimit.globalWindowMs;
@@ -108,7 +117,17 @@ export function rateLimit({ windowMs, max, keyPrefix = 'global', message } = {})
     const key = `${keyPrefix}:${ip}:${req.user?.id || ''}`;
     const now = Date.now();
     let b = buckets.get(key);
-    if (!b || b.reset < now) { b = { count: 0, reset: now + win }; buckets.set(key, b); }
+    if (!b || b.reset < now) {
+      if (buckets.size >= MAX_BUCKETS) {
+        pruneBuckets(now);
+        if (buckets.size >= MAX_BUCKETS) {
+          const oldest = buckets.keys().next().value;
+          if (oldest !== undefined) buckets.delete(oldest);
+        }
+      }
+      b = { count: 0, reset: now + win };
+      buckets.set(key, b);
+    }
     b.count++;
     res.setHeader('X-RateLimit-Limit', limit);
     res.setHeader('X-RateLimit-Remaining', Math.max(0, limit - b.count));

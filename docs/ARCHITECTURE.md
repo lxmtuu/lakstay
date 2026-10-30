@@ -194,6 +194,6 @@ Prod nhiều instance: chuyển sang queue/cron tập trung (BullMQ+Redis hoặc
 |---|---|
 | SQLite thay vì PostgreSQL | Zero-ops cho demo/học; WAL + `BEGIN IMMEDIATE` đủ an toàn cho 1 node. Schema viết chuẩn SQL nên migrate sang Postgres dễ. |
 | Vanilla JS thay vì React | Không build step → clone là chạy; tập trung ngân sách vào backend. |
-| Polling 4s cho trạng thái thanh toán | Đơn giản, đủ tốt; ghi chú nâng cấp lên SSE/WebSocket ở ROADMAP. |
+| SSE realtime + fallback polling cho thanh toán | Server-Sent Events (`/api/payments/:id/stream`) đẩy trạng thái tức thì trên 1 node, tự lùi về polling 3s nếu mạng chặn SSE; cần Redis Pub/Sub khi scale nhiều replica. |
 | Rate-limit in-memory | Đủ cho 1 node; ghi chú chuyển Redis khi scale. |
 | QR mock cho MoMo/VNPAY | Không có sandbox thật; cấu trúc service đã tách để gắn SDK thật sau. |

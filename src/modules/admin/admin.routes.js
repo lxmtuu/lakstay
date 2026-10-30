@@ -5,14 +5,14 @@ import { db, withTransaction } from '../../db.js';
 import { validate } from '../../middlewares/validate.js';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
 import { rateLimit } from '../../middlewares/error.js';
-import { asyncHandler, ok, created, paginate, pageMeta } from '../../utils/http.js';
+import { asyncHandler, ok, created, paginate, pageMeta, escapeLike } from '../../utils/http.js';
 import { Errors } from '../../utils/errors.js';
 import { newId } from '../../utils/id.js';
 import { isValidDateString, todayISO, addDays, stayDates } from '../../utils/date.js';
 import { bookingStats, transitionBooking, listBookings, getBookingById, expireStaleHolds, autoCompletePastBookings, markNoShows } from '../../services/booking.service.js';
 import { occupancyCalendar } from '../../services/availability.service.js';
 import { refundPayment } from '../../services/payment.service.js';
-import { audit, listAudit } from '../../services/audit.service.js';
+import { audit, listAudit, countAudit } from '../../services/audit.service.js';
 import { listOutbox, readOutbox } from '../../services/mail.service.js';
 import { TIERS, tierForSpend, adjustPoints, getSummary } from '../../services/loyalty.service.js';
 
@@ -127,6 +127,7 @@ const roomTypeSchema = z.object({
   name: z.string().min(2).max(80),
   nameVi: z.string().min(2).max(80),
   description: z.string().max(3000).optional(),
+  descriptionEn: z.string().max(3000).optional(),
   capacity: z.number().int().min(1).max(20),
   bedType: z.string().min(2).max(40),
   sizeM2: z.number().int().min(5).max(500),
@@ -150,11 +151,11 @@ router.post('/room-types', adminOnly, validate(roomTypeSchema), asyncHandler(asy
     .replace(/đ/g, 'd').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
   // total_rooms khởi tạo = 0; trigger trg_rooms_count_ai/ad sẽ tự sync khi thêm/xoá phòng vật lý
   db.prepare(`
-    INSERT INTO room_types (id, slug, name, name_vi, description, capacity, bed_type, size_m2, base_price,
+    INSERT INTO room_types (id, slug, name, name_vi, description, description_en, capacity, bed_type, size_m2, base_price,
       total_rooms, amenities, images, cancel_free_hours, cancel_penalty_pct, cancel_no_refund_hours,
       min_stay, max_stay, max_advance_days, is_active)
-    VALUES (?,?,?,?,?,?,?,?,?, 0,?,?,?,?,?,?,?,?,?)
-  `).run(id, slug, d.name, d.nameVi, d.description || null, d.capacity, d.bedType, d.sizeM2, d.basePrice,
+    VALUES (?,?,?,?,?,?,?,?,?,?, 0,?,?,?,?,?,?,?,?,?)
+  `).run(id, slug, d.name, d.nameVi, d.description || null, d.descriptionEn || null, d.capacity, d.bedType, d.sizeM2, d.basePrice,
     JSON.stringify(d.amenities), JSON.stringify(d.images), d.cancelFreeHours, d.cancelPenaltyPct,
     d.cancelNoRefundHours, d.minStay, d.maxStay, d.maxAdvanceDays, d.isActive ? 1 : 0);
   audit({ req, actor: req.user, action: 'ROOM_TYPE_CREATED', entityType: 'room_type', entityId: id, after: d });
@@ -168,6 +169,7 @@ router.put('/room-types/:id', adminOnly, validate(roomTypeSchema.partial()), asy
   db.prepare(`
     UPDATE room_types SET
       name=COALESCE(?,name), name_vi=COALESCE(?,name_vi), description=COALESCE(?,description),
+      description_en=COALESCE(?,description_en),
       capacity=COALESCE(?,capacity), bed_type=COALESCE(?,bed_type), size_m2=COALESCE(?,size_m2),
       base_price=COALESCE(?,base_price), amenities=COALESCE(?,amenities), images=COALESCE(?,images),
       cancel_free_hours=COALESCE(?,cancel_free_hours), cancel_penalty_pct=COALESCE(?,cancel_penalty_pct),
@@ -175,7 +177,8 @@ router.put('/room-types/:id', adminOnly, validate(roomTypeSchema.partial()), asy
       min_stay=COALESCE(?,min_stay), max_stay=COALESCE(?,max_stay), max_advance_days=COALESCE(?,max_advance_days),
       is_active=COALESCE(?,is_active), version=version+1, updated_at=datetime('now')
     WHERE id=? AND version=?
-  `).run(d.name ?? null, d.nameVi ?? null, d.description ?? null, d.capacity ?? null, d.bedType ?? null,
+  `).run(d.name ?? null, d.nameVi ?? null, d.description ?? null, d.descriptionEn ?? null,
+    d.capacity ?? null, d.bedType ?? null,
     d.sizeM2 ?? null, d.basePrice ?? null, d.amenities ? JSON.stringify(d.amenities) : null,
     d.images ? JSON.stringify(d.images) : null, d.cancelFreeHours ?? null, d.cancelPenaltyPct ?? null,
     d.cancelNoRefundHours ?? null, d.minStay ?? null, d.maxStay ?? null, d.maxAdvanceDays ?? null,
@@ -215,15 +218,15 @@ router.patch('/rooms/:id', validate(z.object({
   const before = db.prepare(`SELECT * FROM rooms WHERE id=?`).get(req.params.id);
   if (!before) throw Errors.notFound('Không tìm thấy phòng');
 
-  // KHÔNG cho chuyển sang maintenance/blocked nếu phòng đang có khách (CONFIRMED/CHECKED_IN)
+  // KHÔNG cho chuyển sang maintenance/blocked nếu phòng đang giữ chỗ hoặc có khách (PENDING/CONFIRMED/CHECKED_IN)
   if (req.body.status && req.body.status !== 'available') {
     const conflicts = db.prepare(`
       SELECT rc.stay_date, b.code, b.status FROM room_calendar rc
       JOIN bookings b ON b.id = rc.booking_id
-      WHERE rc.room_id = ? AND b.status IN ('CONFIRMED','CHECKED_IN') AND rc.stay_date >= ?
+      WHERE rc.room_id = ? AND b.status IN ('PENDING','CONFIRMED','CHECKED_IN') AND rc.stay_date >= ?
       ORDER BY rc.stay_date LIMIT 10`).all(req.params.id, todayISO());
     if (conflicts.length) {
-      throw Errors.conflict(`Phòng đang có booking sắp tới, không thể chuyển trạng thái`, { conflicts });
+      throw Errors.conflict(`Phòng đang có booking giữ chỗ / sắp tới, không thể chuyển trạng thái`, { conflicts });
     }
   }
   db.prepare(`UPDATE rooms SET status=COALESCE(?,status), version=version+1 WHERE id=?`)
@@ -397,7 +400,11 @@ router.get('/users', adminOnly, validate(z.object({
   const pg = paginate(req.query);
   const where = [];
   const params = [];
-  if (req.query.q) { where.push('(email LIKE ? OR full_name LIKE ? OR phone LIKE ?)'); const l = `%${req.query.q}%`; params.push(l, l, l); }
+  if (req.query.q) {
+    where.push(`(email LIKE ? ESCAPE '\\' OR full_name LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\')`);
+    const l = `%${escapeLike(req.query.q)}%`;
+    params.push(l, l, l);
+  }
   if (req.query.role) { where.push('role = ?'); params.push(req.query.role); }
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const total = db.prepare(`SELECT COUNT(*) n FROM users ${w}`).get(...params).n;
@@ -427,14 +434,54 @@ router.patch('/users/:id', adminOnly, validate(z.object({
   ok(res, db.prepare(`SELECT id,email,full_name,role,status FROM users WHERE id=?`).get(target.id));
 }));
 
+/* ============================== REVIEWS (kiểm duyệt) ============================== */
+router.get('/reviews', validate(z.object({
+  status: z.enum(['all', 'pending', 'approved']).default('all'),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+}), 'query'), asyncHandler(async (req, res) => {
+  const pg = paginate(req.query);
+  const where = [];
+  if (req.query.status === 'pending') where.push('r.is_approved = 0');
+  else if (req.query.status === 'approved') where.push('r.is_approved = 1');
+  const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const total = db.prepare(`SELECT COUNT(*) n FROM reviews r ${w}`).get().n;
+  const rows = db.prepare(`
+    SELECT r.id, r.booking_id, r.room_type_id, r.rating, r.title, r.content, r.is_approved,
+           r.owner_reply, r.created_at,
+           u.full_name, u.email, rt.name_vi AS room_type_name, b.code AS booking_code
+    FROM reviews r
+    JOIN users u ON u.id = r.user_id
+    JOIN room_types rt ON rt.id = r.room_type_id
+    JOIN bookings b ON b.id = r.booking_id
+    ${w} ORDER BY r.is_approved ASC, r.created_at DESC LIMIT ? OFFSET ?`).all(pg.limit, pg.offset);
+  const counts = db.prepare(`
+    SELECT SUM(CASE WHEN is_approved = 0 THEN 1 ELSE 0 END) AS pending,
+           SUM(CASE WHEN is_approved = 1 THEN 1 ELSE 0 END) AS approved,
+           COUNT(*) AS total,
+           AVG(CASE WHEN is_approved = 1 THEN rating END) AS average
+    FROM reviews`).get();
+  ok(res, {
+    items: rows,
+    summary: {
+      total: counts.total || 0,
+      pending: counts.pending || 0,
+      approved: counts.approved || 0,
+      average: counts.average ? Number(counts.average.toFixed(2)) : null,
+    },
+  }, pageMeta(pg, total));
+}));
+
 /* ============================== AUDIT & SECURITY ============================== */
 router.get('/audit-logs', adminOnly, validate(z.object({
+  action: z.string().optional(),
   entityType: z.string().optional(), entityId: z.string().optional(), actorId: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(50),
 }), 'query'), asyncHandler(async (req, res) => {
   const pg = paginate(req.query);
+  const total = countAudit(req.query);
   const rows = listAudit({ ...req.query, limit: pg.limit, offset: pg.offset });
-  ok(res, { items: rows }, pageMeta(pg, rows.length));
+  ok(res, { items: rows }, pageMeta(pg, total));
 }));
 
 router.get('/security-events', adminOnly, validate(z.object({
@@ -560,8 +607,15 @@ router.get('/loyalty', adminOnly, asyncHandler(async (req, res) => {
   const tier = String(req.query.tier || '').toUpperCase();
   const where = [];
   const args = [];
-  if (q) { where.push(`(u.email LIKE ? OR u.full_name LIKE ?)`); args.push(`%${q}%`, `%${q}%`); }
-  if (tier && TIERS.some((t) => t.key === tier)) { where.push(`la.tier = ?`); args.push(tier); }
+  if (q) {
+    where.push(`(u.email LIKE ? ESCAPE '\\' OR u.full_name LIKE ? ESCAPE '\\')`);
+    const l = `%${escapeLike(q)}%`;
+    args.push(l, l);
+  }
+  if (tier && TIERS.some((t) => t.key === tier)) {
+    where.push(`COALESCE(la.tier, 'MEMBER') = ?`);
+    args.push(tier);
+  }
   const rows = db.prepare(`
     SELECT u.id AS user_id, u.email, u.full_name, u.role,
            COALESCE(la.tier,'MEMBER') tier, COALESCE(la.points,0) points,
@@ -607,6 +661,9 @@ router.get('/outbox', adminOnly, asyncHandler(async (_req, res) => {
 }));
 router.get('/outbox/:id', adminOnly, asyncHandler(async (req, res) => {
   const html = readOutbox(req.params.id, 'email.html');
+  // Sandbox tuyệt đối: email HTML xem trước không bao giờ được chạy script hoặc đọc cookie cùng origin
+  res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:;");
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 }));

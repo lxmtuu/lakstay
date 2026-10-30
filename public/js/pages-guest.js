@@ -17,7 +17,7 @@ const G = (() => {
           <p class="sub" data-reveal>${I18N.t('home.sub')}</p>
           <div id="hero-search"></div>
           <div class="hero-stats" data-reveal>
-            <div><div class="n" data-count="35" data-suffix="">0</div><div class="l">Phòng &amp; biệt thự</div></div>
+            <div><div class="n" data-count="35" data-suffix="">0</div><div class="l">${I18N.t('home.statRooms')}</div></div>
             <div><div class="n" data-count="4.9" data-dec="1">0</div><div class="l">Điểm đánh giá</div></div>
             <div><div class="n" data-count="12800" data-suffix="+">0</div><div class="l">Khách đã lưu trú</div></div>
             <div><div class="n" data-count="18">0</div><div class="l">Hecta rừng thông</div></div>
@@ -36,8 +36,7 @@ const G = (() => {
           <div class="center">
             <span class="kicker center">${I18N.t('home.s1k')}</span>
             <h2 data-reveal>${I18N.t('home.s1t')}</h2>
-            <p class="lead" data-reveal>Từ phòng Standard ấm cúng đến biệt thự tổng thống có hồ bơi nước ấm riêng —
-              mỗi hạng phòng là một cách cảm nhận thành phố sương mù.</p>
+            <p class="lead" data-reveal>${I18N.t('home.s1lead')}</p>
           </div>
           <div class="room-grid" id="home-rooms">${UI.skeletonCards(6)}</div>
           <div class="center" style="margin-top:38px">
@@ -193,7 +192,7 @@ const G = (() => {
       const am = await API.get('/api/rooms/meta/amenities');
       const top = (am.amenities || []).slice(0, 10);
       document.getElementById('amen').innerHTML = top.map((a) =>
-        `<button class="chip" data-am="${UI.esc(a)}" style="cursor:pointer;padding:7px 13px;font-size:12.5px;border:1.5px solid transparent">${UI.esc(a)}</button>`).join('');
+        `<button class="chip" data-am="${UI.esc(a)}" style="cursor:pointer;padding:7px 13px;font-size:12.5px;border:1.5px solid transparent">${UI.esc(I18N.amen(a))}</button>`).join('');
       document.querySelectorAll('[data-am]').forEach((b) => b.onclick = () => {
         const a = b.dataset.am;
         if (chosenAmen.has(a)) chosenAmen.delete(a); else chosenAmen.add(a);
@@ -258,7 +257,7 @@ const G = (() => {
               <div class="media" style="border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--sh-2);position:relative">
                 <img id="big" src="${UI.esc(imgs[0])}" alt="${UI.esc(r.name_vi)}" style="aspect-ratio:16/10;object-fit:cover;width:100%">
               </div>
-              ${imgs.length > 1 ? `<div class="row gap-8" style="margin-top:10px">${imgs.map((im, i) => `<img src="${UI.esc(im)}" data-i="${i}" style="width:84px;height:60px;object-fit:cover;border-radius:10px;cursor:pointer;opacity:.75;transition:.2s" alt="ảnh ${i + 1}">`).join('')}</div>` : ''}
+              ${imgs.length > 1 ? `<div class="row gap-8" style="margin-top:10px;flex-wrap:wrap">${imgs.map((im, i) => `<img src="${UI.esc(im)}" data-i="${i}" style="width:88px;height:62px;object-fit:cover;border-radius:10px;cursor:pointer;opacity:${i === 0 ? '1' : '.68'};border:2px solid ${i === 0 ? 'var(--gold)' : 'transparent'};transition:.2s" alt="${UI.esc(r.name_vi)} — ảnh ${i + 1}">`).join('')}</div>` : ''}
 
               <div style="margin-top:26px">
                 <div class="row gap-12" style="flex-wrap:wrap">
@@ -314,8 +313,9 @@ const G = (() => {
     // thumbs
     main.querySelectorAll('[data-i]').forEach((im) => im.onclick = () => {
       document.getElementById('big').src = im.src;
-      main.querySelectorAll('[data-i]').forEach((x) => x.style.opacity = '.75');
+      main.querySelectorAll('[data-i]').forEach((x) => { x.style.opacity = '.68'; x.style.borderColor = 'transparent'; });
       im.style.opacity = '1';
+      im.style.borderColor = 'var(--gold)';
     });
 
     // calendar
@@ -436,7 +436,7 @@ const G = (() => {
               ${['Wifi tốc độ cao', 'Bãi đỗ xe miễn phí', 'Xe đưa đón sân bay', 'Giặt ủi trong ngày', 'Phòng gym 24/7', 'Khu vui chơi trẻ em', 'Quầy lưu niệm', 'Dịch vụ văn phòng', 'Thuê xe máy', 'Đặt tour trong ngày', 'Trông trẻ theo giờ', 'Bếp chung'].map((a) => `<span class="chip" style="padding:9px 14px;font-size:13px;background:#fff;box-shadow:var(--sh-1)">${UI.esc(a)}</span>`).join('')}
             </div>
           </div>
-          <div class="visual" data-reveal="right"><img src="/img/room-villa.jpg" alt="Hồ bơi villa" style="aspect-ratio:4/3;object-fit:cover"></div>
+          <div class="visual" data-reveal="right"><img src="/img/room-villa.jpg" alt="Không gian phòng nghỉ hướng rừng thông Đà Lạt" style="aspect-ratio:4/3;object-fit:cover"></div>
         </div>
       </section>`;
     C.decorate(main);

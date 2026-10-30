@@ -38,8 +38,19 @@ const cookieBase = {
   path: '/',
 };
 
+function parseDurationMs(spec, fallbackMs) {
+  if (typeof spec === 'number' && spec > 0) return spec * 1000;
+  const m = String(spec || '').trim().match(/^(\d+)\s*(ms|s|m|h|d)?$/i);
+  if (!m) return fallbackMs;
+  const n = Number(m[1]);
+  const unit = (m[2] || 's').toLowerCase();
+  const mult = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[unit] || 1000;
+  return n * mult;
+}
+
 export function setAuthCookies(res, { accessToken, refreshToken, refreshDays }) {
-  res.cookie(COOKIE_ACCESS, accessToken, { ...cookieBase, maxAge: 15 * 60 * 1000 });
+  const accessMaxAge = parseDurationMs(config.jwt.accessTtl, 15 * 60 * 1000);
+  res.cookie(COOKIE_ACCESS, accessToken, { ...cookieBase, maxAge: accessMaxAge });
   if (refreshToken) {
     res.cookie(COOKIE_REFRESH, refreshToken, {
       ...cookieBase,
@@ -47,6 +58,23 @@ export function setAuthCookies(res, { accessToken, refreshToken, refreshDays }) 
       maxAge: refreshDays * 86_400_000,
     });
   }
+}
+
+/** Kiểm tra double-submit CSRF cho các POST dựa trên cookie (refresh / logout) */
+export function verifyCsrfCookie(req, _res, next) {
+  const cookie = req.cookies?.['lks_csrf'];
+  if (!cookie) return next();
+  const header = req.headers[HEADER_CSRF];
+  if (!header || !safeEqual(String(header), String(cookie))) {
+    try {
+      db.prepare(`INSERT INTO security_events (id, type, severity, ip, user_agent, email, detail)
+                  VALUES (?,?,?,?,?,?,?)`)
+        .run(`sec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+             'CSRF_BLOCKED', 'warn', clientIp(req), req.headers['user-agent'] || '', req.user?.email || null, req.originalUrl);
+    } catch { /* ignore */ }
+    return next(Errors.forbidden('CSRF token không hợp lệ'));
+  }
+  next();
 }
 
 export function clearAuthCookies(res) {
@@ -71,7 +99,7 @@ export function requireAuth(req, _res, next) {
     const payload = jwt.verify(token, config.jwt.accessSecret, {
       issuer: 'lakstay', audience: 'lakstay-web',
     });
-    const user = db.prepare(`SELECT id, email, full_name, role, status, email_verified
+    const user = db.prepare(`SELECT id, email, phone, full_name, role, status, email_verified
                              FROM users WHERE id = ?`).get(payload.sub);
     if (!user) return next(Errors.unauthorized('Tài khoản không tồn tại'));
     if (user.status !== 'active') return next(Errors.forbidden('Tài khoản đã bị khoá'));
@@ -104,7 +132,7 @@ export function optionalAuth(req, _res, next) {
   if (!token) return next();
   try {
     const payload = jwt.verify(token, config.jwt.accessSecret, { issuer: 'lakstay', audience: 'lakstay-web' });
-    const user = db.prepare(`SELECT id, email, full_name, role, status FROM users WHERE id = ?`).get(payload.sub);
+    const user = db.prepare(`SELECT id, email, phone, full_name, role, status FROM users WHERE id = ?`).get(payload.sub);
     if (user?.status === 'active') req.user = user;
   } catch { /* bỏ qua, coi như khách */ }
   next();

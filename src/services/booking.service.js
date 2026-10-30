@@ -2,9 +2,9 @@ import { db, withTransaction } from '../db.js';
 import { config } from '../config/index.js';
 import { newId, newBookingCode } from '../utils/id.js';
 import { Errors, BizCode } from '../utils/errors.js';
-import { stayDates, todayISO, diffDays, plusMinutesISO } from '../utils/date.js';
+import { stayDates, todayISO, addDays, diffDays, plusMinutesISO } from '../utils/date.js';
 import { validateStayDates, pickRooms, holdRooms, releaseRooms, countAvailable } from './availability.service.js';
-import { quoteBooking, validateCoupon } from './pricing.service.js';
+import { quoteBooking, normalizeLines } from './pricing.service.js';
 import { assertTransition, STATUS, canTransition } from './booking-state.js';
 import { computeRefund } from './cancellation.service.js';
 import { revokeForBooking } from './loyalty.service.js';
@@ -67,9 +67,10 @@ export function createBooking(input, { req } = {}) {
     guestName, guestPhone, guestEmail, specialRequest = null, idempotencyKey = null,
   } = input;
 
-  // ---------- LỚP 1: validate ngày (làm sớm để fail fast, không tốn lock) ----------
+  // ---------- LỚP 1: validate ngày & chuẩn hoá danh sách phòng (làm sớm để fail fast) ----------
+  const normalizedLines = normalizeLines(lines, guests, { checkIn, checkOut });
   // Dùng policy khắt khe nhất trong các room type được chọn
-  const chosenTypes = lines.map((l) =>
+  const chosenTypes = normalizedLines.map((l) =>
     db.prepare(`SELECT * FROM room_types WHERE id = ? AND is_active = 1`).get(l.roomTypeId));
   for (const t of chosenTypes) {
     if (!t) throw Errors.notFound('Loại phòng không tồn tại hoặc đã ngừng kinh doanh');
@@ -81,7 +82,7 @@ export function createBooking(input, { req } = {}) {
   };
   const { nights } = validateStayDates({ checkIn, checkOut, ...policy });
 
-  const totalQty = lines.reduce((s, l) => s + l.qty, 0);
+  const totalQty = normalizedLines.reduce((s, l) => s + l.qty, 0);
   if (totalQty > config.booking.maxRoomsPerBooking) {
     throw Errors.badRequest(`Tối đa ${config.booking.maxRoomsPerBooking} phòng mỗi lần đặt`);
   }
@@ -107,9 +108,10 @@ export function createBooking(input, { req } = {}) {
 
     // TÍNH GIÁ LẠI TRÊN SERVER — tuyệt đối không tin giá client gửi
     const quote = quoteBooking({
-      lines: lines.map((l) => ({
-        roomTypeId: l.roomTypeId, checkIn, checkOut, qty: l.qty, guests: l.guests || guests,
-      })),
+      lines: normalizedLines,
+      guests,
+      checkIn,
+      checkOut,
       couponCode,
       userId: user.id,
     });
@@ -185,6 +187,26 @@ export function createBooking(input, { req } = {}) {
   return { booking: getBookingById(result.bookingId), replayed: false };
 }
 
+/** Lấy chính sách huỷ khắt khe nhất trong các loại phòng thuộc booking */
+export function bookingCancelPolicy(bookingId, tx = db) {
+  const row = tx.prepare(`
+    SELECT MAX(rt.cancel_free_hours) AS cancel_free_hours,
+           MAX(rt.cancel_penalty_pct) AS cancel_penalty_pct,
+           MAX(rt.cancel_no_refund_hours) AS cancel_no_refund_hours
+    FROM booking_rooms br JOIN room_types rt ON rt.id = br.room_type_id
+    WHERE br.booking_id = ?`).get(bookingId);
+  if (!row || row.cancel_free_hours === null) return {};
+  return row;
+}
+
+function restoreCouponUsageIfUnpaid(tx, bookingId) {
+  const cu = tx.prepare(`SELECT coupon_id FROM coupon_usages WHERE booking_id = ?`).get(bookingId);
+  if (cu) {
+    tx.prepare(`UPDATE coupons SET used_count = MAX(0, used_count - 1) WHERE id = ?`).run(cu.coupon_id);
+    tx.prepare(`DELETE FROM coupon_usages WHERE booking_id = ?`).run(bookingId);
+  }
+}
+
 /**
  * HUỶ BOOKING — tuân thủ state machine + tính refund + nhả phòng trong 1 transaction
  */
@@ -205,11 +227,7 @@ export function cancelBooking({ bookingId, actor, reason, req, force = false, is
     const check = canTransition(b.status, targetStatus, actor.role);
     if (!check.allowed) throw Errors.conflict(check.reason, { code: BizCode.INVALID_TRANSITION });
 
-    // Tính refund (cần policy của room type đầu tiên)
-    const firstLine = tx.prepare(`
-      SELECT br.*, rt.cancel_free_hours, rt.cancel_penalty_pct, rt.cancel_no_refund_hours
-      FROM booking_rooms br JOIN room_types rt ON rt.id = br.room_type_id
-      WHERE br.booking_id = ? LIMIT 1`).get(bookingId);
+    const policy = bookingCancelPolicy(bookingId, tx);
 
     const paid = tx.prepare(`
       SELECT COALESCE(SUM(amount),0) AS total FROM payments
@@ -220,22 +238,30 @@ export function cancelBooking({ bookingId, actor, reason, req, force = false, is
       nights: b.nights,
       subtotal: b.subtotal,
       paid_amount: paid,
-      policy: firstLine ? {
-        cancel_free_hours: firstLine.cancel_free_hours,
-        cancel_penalty_pct: firstLine.cancel_penalty_pct,
-        cancel_no_refund_hours: firstLine.cancel_no_refund_hours,
-      } : {},
+      policy,
     }, { isNoShow });
 
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-    tx.prepare(`
+    const info = tx.prepare(`
       UPDATE bookings SET status = ?, cancelled_at = ?, cancel_reason = ?, cancelled_by = ?,
-                          version = version + 1, updated_at = ?
+                          hold_expires_at = NULL, version = version + 1, updated_at = ?
       WHERE id = ? AND version = ?   -- optimistic lock
     `).run(targetStatus, now, reason ?? null, actor.id, now, bookingId, b.version);
 
+    if (info.changes === 0) {
+      throw Errors.conflict('Booking vừa được cập nhật bởi người khác, vui lòng tải lại trang',
+        { code: 'VERSION_CONFLICT' });
+    }
+
     // NHẢ PHÒNG — booking huỷ thì phòng phải về kho ngay
     const released = tx.prepare(`DELETE FROM room_calendar WHERE booking_id = ?`).run(bookingId).changes;
+
+    // Huỷ mọi QR / giao dịch PENDING còn treo để chặn thanh toán muộn vào đơn đã huỷ
+    tx.prepare(`UPDATE payments SET status = 'EXPIRED', updated_at = ? WHERE booking_id = ? AND status = 'PENDING'`)
+      .run(now, bookingId);
+
+    // Nếu đơn chưa trả tiền mà huỷ => hoàn lại lượt dùng coupon cho khách
+    if (paid === 0) restoreCouponUsageIfUnpaid(tx, bookingId);
 
     // ---- LOYALTY: đơn đã trả tiền mà huỷ => thu hồi điểm + trừ chi tiêu (trong tx) ----
     if (paid > 0) {
@@ -270,10 +296,21 @@ export function transitionBooking({ bookingId, to, actor, req, note = null }) {
     if (!b) throw Errors.notFound('Không tìm thấy booking');
     assertTransition(b.status, to, actor.role);
 
+    if (to === STATUS.CONFIRMED) {
+      const paid = tx.prepare(`
+        SELECT COALESCE(SUM(amount),0) n FROM payments
+        WHERE booking_id = ? AND type = 'CHARGE' AND status = 'PAID'`).get(bookingId).n;
+      if (paid < b.total_amount) {
+        throw Errors.conflict('Đơn chưa thanh toán đủ nên không thể chuyển sang Đã xác nhận',
+          { code: BizCode.PAYMENT_MISMATCH });
+      }
+    }
+
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     // Cột timestamp riêng cho từng trạng thái đích (whitelist => không lo SQL injection)
     const TIMESTAMP_FIELD = {
+      CONFIRMED: 'confirmed_at',
       CHECKED_IN: 'checkin_at',
       COMPLETED: 'checkout_at',
       CANCELLED: 'cancelled_at',
@@ -285,10 +322,11 @@ export function transitionBooking({ bookingId, to, actor, req, note = null }) {
       ? tx.prepare(`
           UPDATE bookings
              SET status = ?, updated_at = ?, ${tsField} = ?,
+                 hold_expires_at = CASE WHEN ? IN ('CONFIRMED','CANCELLED','NO_SHOW','COMPLETED') THEN NULL ELSE hold_expires_at END,
                  cancel_reason = COALESCE(?, cancel_reason),
                  version = version + 1
            WHERE id = ? AND version = ?
-        `).run(to, now, now, note, bookingId, b.version)
+        `).run(to, now, now, to, note, bookingId, b.version)
       : tx.prepare(`
           UPDATE bookings
              SET status = ?, updated_at = ?,
@@ -303,11 +341,16 @@ export function transitionBooking({ bookingId, to, actor, req, note = null }) {
         { code: 'VERSION_CONFLICT' });
     }
 
-    if (to === STATUS.CHECKED_IN) {
+    if (to === STATUS.CONFIRMED || to === STATUS.CHECKED_IN) {
       tx.prepare(`UPDATE room_calendar SET status = 'CONFIRMED' WHERE booking_id = ?`).run(bookingId);
     }
-    if (to === STATUS.COMPLETED || to === STATUS.CANCELLED) {
+    if (to === STATUS.COMPLETED || to === STATUS.CANCELLED || to === STATUS.NO_SHOW) {
       tx.prepare(`DELETE FROM room_calendar WHERE booking_id = ?`).run(bookingId);
+    }
+    if (to === STATUS.CANCELLED || to === STATUS.NO_SHOW) {
+      tx.prepare(`UPDATE payments SET status = 'EXPIRED', updated_at = ? WHERE booking_id = ? AND status = 'PENDING'`)
+        .run(now, bookingId);
+      if (b.status === STATUS.PENDING) restoreCouponUsageIfUnpaid(tx, bookingId);
     }
     return { booking_id: bookingId, from: b.status, to, before: b };
   });
@@ -452,7 +495,7 @@ export function listBookings({ userId = null, role = 'customer', status = null, 
 
 /** Stats cho dashboard admin */
 export function bookingStats({ days = 30 } = {}) {
-  const from = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const from = addDays(todayISO(), -days);
   const byStatus = db.prepare(`SELECT status, COUNT(*) n, COALESCE(SUM(total_amount),0) revenue
                                FROM bookings GROUP BY status`).all();
   const revenue = db.prepare(`SELECT COALESCE(SUM(amount),0) n FROM payments

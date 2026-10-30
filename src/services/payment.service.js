@@ -89,6 +89,9 @@ export async function createPayment({ bookingId, provider = 'VIETQR', amount = n
   if (outstanding <= 0) throw Errors.conflict('Booking đã được thanh toán đủ', { code: BizCode.PAYMENT_MISMATCH });
 
   const payAmount = amount ?? outstanding;
+  if (actorRole === 'customer' && payAmount !== outstanding) {
+    throw Errors.badRequest(`Vui lòng thanh toán toàn bộ số tiền còn lại (${outstanding.toLocaleString('vi-VN')}₫)`);
+  }
   if (payAmount > outstanding) {
     throw Errors.badRequest(`Số tiền vượt quá phần còn phải thanh toán (${outstanding.toLocaleString('vi-VN')}₫)`);
   }
@@ -230,6 +233,13 @@ export function handlePaymentSuccess({ txnRef = null, providerTxnId = null, amou
       throw Errors.conflict(`Giao dịch đã ${payment.status === 'EXPIRED' ? 'hết hạn' : 'thất bại'}, không thể ghi nhận`);
     }
 
+    const booking = tx.prepare(`SELECT * FROM bookings WHERE id = ?`).get(payment.booking_id);
+    if (!booking || ['CANCELLED', 'EXPIRED', 'NO_SHOW', 'REFUNDED'].includes(booking.status)) {
+      tx.prepare(`UPDATE payment_webhook_logs SET error = ? WHERE id = ?`)
+        .run(`booking already ${booking?.status || 'missing'}`, logId);
+      throw Errors.conflict(`Booking đã ở trạng thái ${booking?.status || 'không hợp lệ'}, không thể ghi nhận thanh toán`);
+    }
+
     // ---- AMOUNT MATCHING ----
     const received = Number(amount ?? payment.amount);
     if (received < payment.amount) {
@@ -257,24 +267,32 @@ export function handlePaymentSuccess({ txnRef = null, providerTxnId = null, amou
        WHERE id = ? AND status = 'PENDING'
     `).run(now, providerTxnId || null, received, JSON.stringify(meta), now, payment.id);
 
-    // ---- Kích hoạt state machine: PENDING -> CONFIRMED ----
-    const booking = tx.prepare(`SELECT * FROM bookings WHERE id = ?`).get(payment.booking_id);
-    if (booking.status === 'PENDING') {
+    // ---- Kích hoạt state machine: PENDING -> CONFIRMED (chỉ khi đã thu đủ tổng đơn) ----
+    const totalPaid = tx.prepare(`
+      SELECT COALESCE(SUM(amount),0) n FROM payments
+      WHERE booking_id = ? AND type = 'CHARGE' AND status = 'PAID'`).get(booking.id).n;
+
+    if (booking.status === 'PENDING' && totalPaid >= booking.total_amount) {
       tx.prepare(`UPDATE bookings SET status='CONFIRMED', confirmed_at=?, hold_expires_at=NULL,
                   version = version + 1, updated_at=? WHERE id=? AND status='PENDING'`)
         .run(now, now, booking.id);
       tx.prepare(`UPDATE room_calendar SET status='CONFIRMED' WHERE booking_id=?`).run(booking.id);
     }
-    // ---- LOYALTY: cộng điểm TRONG cùng transaction (atomic, idempotent) ----
-    const loyalty = earnForBooking({
-      userId: booking.user_id, bookingId: booking.id, amount: payment.amount,
-      note: `Tích điểm đơn ${booking.code}`,
-    }, tx);
+    // ---- LOYALTY: cộng điểm TRONG cùng transaction khi đã thanh toán đủ (atomic, idempotent) ----
+    let loyalty = null;
+    if (totalPaid >= booking.total_amount) {
+      loyalty = earnForBooking({
+        userId: booking.user_id, bookingId: booking.id, amount: booking.total_amount,
+        note: `Tích điểm đơn ${booking.code}`,
+      }, tx);
+    }
     if (loyalty) logger.info('Loyalty points earned', { user: booking.user_id, points: loyalty.points, tier: loyalty.tier });
 
-    // Huỷ các QR PENDING khác của cùng booking (đã trả tiền rồi thì không cần nữa)
-    tx.prepare(`UPDATE payments SET status='EXPIRED' WHERE booking_id=? AND status='PENDING' AND id<>?`)
-      .run(payment.booking_id, payment.id);
+    // Huỷ các QR PENDING khác của cùng booking khi đã thu đủ tiền
+    if (totalPaid >= booking.total_amount) {
+      tx.prepare(`UPDATE payments SET status='EXPIRED' WHERE booking_id=? AND status='PENDING' AND id<>?`)
+        .run(payment.booking_id, payment.id);
+    }
 
     tx.prepare(`UPDATE payment_webhook_logs SET processed = 1 WHERE id = ?`).run(logId);
 
@@ -342,7 +360,10 @@ export function refundPayment({ bookingId, amount = null, actor, req, reason }) 
       newTxnRef(`RF${b.code}`), JSON.stringify({ reason, by: actor.id, refunded_from: charged }), now, now, now);
 
     const totalRefunded = refunded + refundAmount;
-    if (b.status === 'CANCELLED' || b.status === 'NO_SHOW') {
+    const nextStatus = (['CANCELLED', 'NO_SHOW', 'COMPLETED'].includes(b.status) && totalRefunded >= charged)
+      ? 'REFUNDED'
+      : b.status;
+    if (nextStatus === 'REFUNDED') {
       tx.prepare(`UPDATE bookings SET status='REFUNDED', updated_at=?, version=version+1 WHERE id=?`)
         .run(now, bookingId);
     }
@@ -350,7 +371,7 @@ export function refundPayment({ bookingId, amount = null, actor, req, reason }) 
     audit({ req, actor, action: 'PAYMENT_REFUNDED', entityType: 'payment', entityId: id,
             before: { status: b.status, refunded }, after: { amount: refundAmount, total_refunded: totalRefunded, reason } });
 
-    return { refund_id: id, amount: refundAmount, total_refunded: totalRefunded, booking_status: totalRefunded >= charged ? 'REFUNDED' : b.status };
+    return { refund_id: id, amount: refundAmount, total_refunded: totalRefunded, booking_status: nextStatus };
   });
 }
 

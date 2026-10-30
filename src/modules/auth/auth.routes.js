@@ -5,8 +5,11 @@ import { db, withTransaction } from '../../db.js';
 import { config } from '../../config/index.js';
 import { validate } from '../../middlewares/validate.js';
 import { rateLimit } from '../../middlewares/error.js';
-import { requireAuth, signAccessToken, signRefreshToken, setAuthCookies, clearAuthCookies, COOKIE_REFRESH } from '../../middlewares/auth.js';
-import { newId, sha256, randomToken, safeEqual } from '../../utils/id.js';
+import {
+  requireAuth, optionalAuth, verifyCsrfCookie,
+  signAccessToken, signRefreshToken, setAuthCookies, clearAuthCookies, COOKIE_REFRESH,
+} from '../../middlewares/auth.js';
+import { newId, sha256, randomToken } from '../../utils/id.js';
 import { Errors } from '../../utils/errors.js';
 import { ok, created, asyncHandler, clientIp, sanitize } from '../../utils/http.js';
 import { audit, securityEvent } from '../../services/audit.service.js';
@@ -15,6 +18,7 @@ import { logger } from '../../utils/logger.js';
 const router = Router();
 
 const BCRYPT_ROUNDS = config.isProd ? 12 : 10; // prod tốn ~250ms/lần hash là CHUẨN (chống brute-force)
+const DUMMY_HASH = bcrypt.hashSync('lakstay-anti-timing-dummy-secret', BCRYPT_ROUNDS);
 const MAX_FAILED = 5;
 const LOCK_MINUTES = 15;
 
@@ -55,6 +59,12 @@ function issueTokens(res, user, { req, rotateFrom = null } = {}) {
   }
 
   setAuthCookies(res, { accessToken, refreshToken, refreshDays: config.jwt.refreshTtlDays });
+  if (!req?.cookies?.lks_csrf) {
+    res.cookie('lks_csrf', randomToken(24), {
+      httpOnly: false,
+      sameSite: 'lax', secure: config.isProd, path: '/', maxAge: 86_400_000,
+    });
+  }
   return { accessToken, refreshToken };
 }
 
@@ -119,9 +129,8 @@ router.post('/login',
 
     const user = db.prepare(`SELECT * FROM users WHERE email = ?`).get(email);
 
-    // KHÔNG tiết lộ "email tồn tại hay không" — luôn trả cùng 1 thông điệp + cùng thời gian
-    const fakeHash = '$2a$10$C6UzMDM.H6dfI/f/IKcEeO6Zr0dJkYbJxvGxJxvGxJxvGxJxvGxJ';
-    const hashToCheck = user?.password_hash || fakeHash;
+    // KHÔNG tiết lộ "email tồn tại hay không" — luôn trả cùng 1 thông điệp + cùng thời gian (hash đủ 60 ký tự cùng cost)
+    const hashToCheck = user?.password_hash || DUMMY_HASH;
     const passwordOk = await bcrypt.compare(password, hashToCheck);
 
     if (!user) {
@@ -148,11 +157,10 @@ router.post('/login',
         type: 'LOGIN_FAIL_BAD_PASSWORD', severity: fails >= MAX_FAILED ? 'critical' : 'warn',
         ip, userAgent: ua, email, detail: `attempt ${fails}`,
       });
-      throw Errors.unauthorized(
-        lockUntil
-          ? `Sai mật khẩu ${MAX_FAILED} lần — tài khoản tạm khoá ${LOCK_MINUTES} phút.`
-          : `Email hoặc mật khẩu không đúng (còn ${MAX_FAILED - fails} lần thử)`
-      );
+      if (lockUntil) {
+        throw Errors.locked(`Sai mật khẩu ${MAX_FAILED} lần — tài khoản tạm khoá ${LOCK_MINUTES} phút.`);
+      }
+      throw Errors.unauthorized('Email hoặc mật khẩu không đúng');
     }
 
     db.prepare(`UPDATE users SET failed_logins = 0, locked_until = NULL,
@@ -171,7 +179,7 @@ router.post('/login',
 /* ------------------------------------------------------------------ */
 /*  REFRESH — rotation + reuse detection                               */
 /* ------------------------------------------------------------------ */
-router.post('/refresh', asyncHandler(async (req, res) => {
+router.post('/refresh', verifyCsrfCookie, asyncHandler(async (req, res) => {
   const token = req.cookies?.[COOKIE_REFRESH];
   if (!token) throw Errors.unauthorized('Không có refresh token');
 
@@ -204,14 +212,17 @@ router.post('/refresh', asyncHandler(async (req, res) => {
 /* ------------------------------------------------------------------ */
 /*  LOGOUT                                                             */
 /* ------------------------------------------------------------------ */
-router.post('/logout', asyncHandler(async (req, res) => {
+router.post('/logout', optionalAuth, verifyCsrfCookie, asyncHandler(async (req, res) => {
   const token = req.cookies?.[COOKIE_REFRESH];
   if (token) {
-    const row = db.prepare(`SELECT id FROM refresh_tokens WHERE token_hash = ?`).get(sha256(token));
+    const row = db.prepare(`SELECT id, user_id FROM refresh_tokens WHERE token_hash = ?`).get(sha256(token));
     if (row) {
       db.prepare(`UPDATE refresh_tokens SET revoked_at = datetime('now') WHERE id = ?`).run(row.id);
-      if (req.user) audit({ req, actor: req.user, action: 'USER_LOGOUT', entityType: 'refresh_token', entityId: row.id });
+      const actor = req.user || db.prepare(`SELECT id, role FROM users WHERE id = ?`).get(row.user_id);
+      if (actor) audit({ req, actor, action: 'USER_LOGOUT', entityType: 'refresh_token', entityId: row.id });
     }
+  } else if (req.user) {
+    audit({ req, actor: req.user, action: 'USER_LOGOUT', entityType: 'user', entityId: req.user.id });
   }
   clearAuthCookies(res);
   res.clearCookie('lks_csrf', { path: '/' });

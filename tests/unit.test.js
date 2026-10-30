@@ -147,3 +147,44 @@ test('loyalty: hạng theo chi tiêu tích luỹ (ngưỡng 0/10tr/30tr/80tr)', 
   assert.equal(tierForSpend(1e12).key, 'PLATINUM');
   assert.equal(tierForSpend(30_000_000).discount_pct, 5);
 });
+
+/* ---------------- TIMEZONE, SQL ESCAPING, RBAC & MAIL XSS ---------------- */
+import { todayISO, currentHourVN } from '../src/utils/date.js';
+import { escapeLike } from '../src/utils/http.js';
+import { templates } from '../src/services/mail.service.js';
+
+test('date: todayISO + currentHourVN luôn tính theo múi giờ Việt Nam (UTC+7)', () => {
+  // 2026-10-29T18:30:00Z = 01:30 sáng ngày 2026-10-30 tại Đà Lạt (UTC+7)
+  const sample = new Date('2026-10-29T18:30:00Z');
+  assert.equal(todayISO(sample), '2026-10-30');
+  assert.equal(currentHourVN(sample), 1);
+});
+
+test('http: escapeLike thoát đúng ký tự đại diện %, _ và \\', () => {
+  assert.equal(escapeLike('100%_off\\deal'), '100\\%\\_off\\\\deal');
+});
+
+test('booking-state: staff không được tự chuyển CANCELLED -> REFUNDED', () => {
+  assert.equal(canTransition('CANCELLED', 'REFUNDED', 'staff').allowed, false);
+  assert.equal(canTransition('CANCELLED', 'REFUNDED', 'admin').allowed, true);
+  assert.equal(canTransition('CANCELLED', 'REFUNDED', 'system').allowed, true);
+});
+
+test('mail: escape HTML chống Stored XSS trong guest_name, tên phòng và ghi chú huỷ', () => {
+  const { html } = templates.booking_confirmed({
+    booking: {
+      code: 'LKS-20261030-XSS1',
+      guest_name: '<img src=x onerror=alert(1)>',
+      check_in: '2026-11-10',
+      check_out: '2026-11-12',
+      total_amount: 3_000_000,
+      paid_amount: 3_000_000,
+      lines: [{ qty: 1, room_type_name: 'Deluxe <script>steal()</script>' }],
+    },
+    url: 'http://localhost:3000/#/bookings/1?x=" onclick="evil()',
+  });
+  assert.ok(!html.includes('<script>steal()</script>'));
+  assert.ok(!html.includes('<img src=x onerror=alert(1)>'));
+  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+  assert.ok(html.includes('&quot; onclick=&quot;evil()'));
+});

@@ -98,7 +98,7 @@ Các giá trị quan trọng:
 ## 5. Khởi tạo database + dữ liệu mẫu
 
 ```bash
-npm run db:init     # tạo schema (16 bảng) tại src/data/lakstay.db
+npm run db:init     # tạo schema (18 bảng + schema_migrations) tại src/data/lakstay.db
 npm run db:seed     # nạp dữ liệu mẫu: 6 hạng phòng, 35 phòng, user, coupon, booking, review
 ```
 
@@ -139,9 +139,9 @@ Mở trình duyệt:
 Mở **terminal thứ hai** (server vẫn chạy ở terminal đầu):
 
 ```bash
-npm run smoke              # 67 kiểm thử end-to-end
+npm run test:smoke         # 101 kiểm thử end-to-end
 npm run test:concurrency   # bắn 40 request đồng thời, chứng minh không overbook
-npm test                   # unit test
+npm test                   # 23 unit test
 ```
 
 ---
@@ -157,7 +157,7 @@ npm test                   # unit test
 | Database lỗi / dữ liệu lạ | Chạy `npm run db:reset` để dựng lại từ đầu. |
 | Quên mật khẩu demo | Mọi tài khoản seed dùng `Lakstay@2026`. Hoặc `npm run db:reset`. |
 | Trang trắng / lỗi font khi mở trực tiếp file HTML | Phải truy cập qua server (`http://localhost:3000`), không mở file `.html` bằng cách double-click. |
-| Ảnh không hiển thị | Đảm bảo thư mục `public/img/` còn đủ 8 file jpg. |
+| Ảnh không hiển thị | Đảm bảo thư mục `public/img/` (cùng `public/img/rooms/`) còn đầy đủ các file ảnh `.jpg`. |
 
 Sinh secret mạnh để điền vào `.env`:
 
@@ -167,7 +167,22 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 ---
 
-## 9. Deploy lên server thật (tóm tắt)
+## 9. Deploy bản Preview / Demo lên Vercel
+
+Repo đã cấu hình sẵn `api/index.js` + `vercel.json` để triển khai trực tiếp lên **Vercel**:
+- Frontend tĩnh (`public/`) được phục vụ từ Vercel Edge CDN.
+- Toàn bộ API (`/api/*`, `/verify/*`, `/healthz`) chạy qua Serverless Function `api/index.js`.
+- Khi chạy trên Vercel (`VERCEL=1`), SQLite tự động tạo & seed dữ liệu mẫu vào `/tmp/lakstay.db`, Email Outbox lưu tại `/tmp/lakstay-outbox` (lưu ý: bộ nhớ `/tmp` của Serverless mang tính tạm thời cho mục đích **demo / preview**; khi chạy thương mại cần dùng VPS + ổ đĩa bền vững hoặc PostgreSQL).
+
+Các biến môi trường cần đặt trên Vercel Project Settings → Environment Variables:
+- `JWT_ACCESS_SECRET` — chuỗi bí mật ngẫu nhiên ≥ 32 ký tự
+- `JWT_REFRESH_SECRET` — chuỗi bí mật ngẫu nhiên ≥ 32 ký tự
+- `PAYMENT_WEBHOOK_SECRET` — chuỗi bí mật ngẫu nhiên ≥ 32 ký tự
+- `DEMO_MODE=1` — (tuỳ chọn cho bản preview) cho phép bấm nút **"Giả lập đã thanh toán (Demo)"** trên trang VietQR
+
+---
+
+## 10. Deploy lên server thật (tóm tắt)
 
 1. **VPS + PM2 + Nginx** (khuyến nghị cho khởi đầu):
    ```bash
