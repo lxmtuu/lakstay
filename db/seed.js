@@ -8,7 +8,7 @@
  * => Dữ liệu seed luôn nhất quán với logic nghiệp vụ, không "làm giả" bằng INSERT tay.
  */
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { db, initSchema } from '../src/db.js';
 import { createBooking, transitionBooking } from '../src/services/booking.service.js';
@@ -327,7 +327,11 @@ ${made.map((m) => `    ${m.code}  ${m.status.padEnd(10)} ${m.checkIn}  ${m.total
 }
 }
 
-const isDirectRun = Boolean(process.argv[1]) && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+const selfPath = path.resolve(fileURLToPath(import.meta.url));
+const argPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
+const isDirectRun = process.platform === 'win32'
+  ? selfPath.toLowerCase() === argPath.toLowerCase()
+  : selfPath === argPath;
 if (isDirectRun) {
   await seedDatabase();
   db.close();
