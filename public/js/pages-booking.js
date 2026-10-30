@@ -11,7 +11,7 @@ const B = (() => {
       checkIn: params.in || UI.addDays(UI.today(), 7),
       checkOut: params.out || UI.addDays(params.in || UI.addDays(UI.today(), 7), 2),
       guests: +(params.guests || 2),
-      lines: params.room ? [{ roomTypeId: params.room, qty: +(params.qty || 1), guests: +(params.guests || 2) }] : [],
+      lines: params.room ? [{ roomTypeId: params.room, qty: +(params.qty || 1) }] : [],
       coupon: params.coupon || '',
       guest: {},
       quote: null,
@@ -90,7 +90,7 @@ const B = (() => {
           const id = b.dataset.inc; const t = types.find((x) => x.id === id);
           const line = state.lines.find((l) => l.roomTypeId === id);
           if (line) line.qty = Math.min(t.available, line.qty + 1);
-          else state.lines.push({ roomTypeId: id, qty: 1, guests: state.guests });
+          else state.lines.push({ roomTypeId: id, qty: 1 });
           renderList(); updateSummary();
         });
         document.querySelectorAll('[data-dec]').forEach((b) => b.onclick = () => {
@@ -107,7 +107,7 @@ const B = (() => {
         try {
           const q = await API.post('/api/rooms/quote', {
             checkIn: state.checkIn, checkOut: state.checkOut, guests: state.guests,
-            lines: state.lines.map((l) => ({ roomTypeId: l.roomTypeId, qty: l.qty, guests: l.guests || state.guests })),
+            lines: state.lines.map((l) => ({ roomTypeId: l.roomTypeId, qty: l.qty })),
             couponCode: state.coupon || undefined,
           });
           state.quote = q.quote;
@@ -148,12 +148,12 @@ const B = (() => {
             <p class="tiny muted" style="margin:4px 0 16px">Thông tin này dùng để làm thủ tục check-in và gửi xác nhận.</p>
             <form id="gf" style="display:grid;gap:14px">
               <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px">
-                <div class="field"><label>Họ và tên *</label><input class="input" name="guestName" required value="${UI.esc(state.guest.name || u?.user?.full_name || '')}"></div>
-                <div class="field"><label>Số điện thoại *</label><input class="input" name="guestPhone" required placeholder="09xxxxxxxx" value="${UI.esc(state.guest.phone || u?.user?.phone || '')}"></div>
+                <div class="field"><label>Họ và tên *</label><input class="input" name="guestName" required value="${UI.esc(state.guest.guestName ?? u?.user?.full_name ?? '')}"></div>
+                <div class="field"><label>Số điện thoại *</label><input class="input" name="guestPhone" required placeholder="09xxxxxxxx" value="${UI.esc(state.guest.guestPhone ?? u?.user?.phone ?? '')}"></div>
               </div>
-              <div class="field"><label>Email nhận xác nhận *</label><input class="input" type="email" name="guestEmail" required value="${UI.esc(state.guest.email || u?.user?.email || '')}"></div>
+              <div class="field"><label>Email nhận xác nhận *</label><input class="input" type="email" name="guestEmail" required value="${UI.esc(state.guest.guestEmail ?? u?.user?.email ?? '')}"></div>
               <div class="field"><label>Yêu cầu đặc biệt</label>
-                <textarea class="input" name="specialRequest" rows="3" placeholder="VD: phòng tầng cao, thêm giường phụ, nhận phòng sớm…">${UI.esc(state.guest.request || '')}</textarea></div>
+                <textarea class="input" name="specialRequest" rows="3" placeholder="VD: phòng tầng cao, thêm giường phụ, nhận phòng sớm…">${UI.esc(state.guest.specialRequest ?? '')}</textarea></div>
               <div class="field"><label>${I18N.t('bk.coupon')} (${I18N.t('rooms.all') === 'Tất cả' ? 'tuỳ chọn' : 'optional'})</label>
                 <div class="row gap-8">
                   <input class="input" name="coupon" value="${UI.esc(state.coupon)}" placeholder="DALAT10" style="text-transform:uppercase">
@@ -172,30 +172,39 @@ const B = (() => {
             </div>
           </aside>
         </div>`;
-      document.getElementById('back2').onclick = () => { state.step = 1; render(); };
-      document.getElementById('apply').onclick = async () => {
+      const syncFormDraft = () => {
         const f = Object.fromEntries(new FormData(document.getElementById('gf')));
+        state.guest = {
+          guestName: f.guestName ?? '',
+          guestPhone: f.guestPhone ?? '',
+          guestEmail: f.guestEmail ?? '',
+          specialRequest: f.specialRequest ?? '',
+        };
+        return f;
+      };
+      document.getElementById('back2').onclick = () => { syncFormDraft(); state.step = 1; render(); };
+      document.getElementById('apply').onclick = async () => {
+        const f = syncFormDraft();
         state.coupon = (f.coupon || '').trim().toUpperCase();
         const msg = document.getElementById('cpn-msg');
         try {
           const q = await API.post('/api/rooms/quote', {
             checkIn: state.checkIn, checkOut: state.checkOut, guests: state.guests,
-            lines: state.lines, couponCode: state.coupon || undefined,
+            lines: state.lines.map((l) => ({ roomTypeId: l.roomTypeId, qty: l.qty })),
+            couponCode: state.coupon || undefined,
           });
           state.quote = q.quote;
-          msg.innerHTML = `<span style="color:var(--success)">✓ ${UI.esc(q.quote.coupon.label)} — giảm ${UI.vnd(q.quote.discount)}</span>`;
-          UI.toast('Đã áp dụng mã giảm giá', 'success');
+          msg.innerHTML = `<span style="color:var(--success)">✓ ${UI.esc(q.quote.coupon?.label || 'Đã cập nhật giá')}${q.quote.discount ? ` — giảm ${UI.vnd(q.quote.discount)}` : ''}</span>`;
+          UI.toast(state.coupon ? 'Đã áp dụng mã giảm giá' : 'Đã gỡ mã giảm giá', 'success');
           state.step = 2; render();
         } catch (e) { msg.innerHTML = `<span class="err-text">${UI.esc(e.message)}</span>`; state.coupon = ''; }
       };
       document.getElementById('next2').onclick = () => {
-        const form = document.getElementById('gf');
-        const f = Object.fromEntries(new FormData(form));
+        const f = syncFormDraft();
         // validate phía client cho phản hồi nhanh
         if (!f.guestName || f.guestName.trim().length < 2) return UI.toast('Vui lòng nhập họ tên', 'warning');
         if (!/^(\+?84|0)\d{8,10}$/.test(f.guestPhone.trim())) return UI.toast('Số điện thoại không hợp lệ', 'warning');
         if (!/^\S+@\S+\.\S+$/.test(f.guestEmail.trim())) return UI.toast('Email không hợp lệ', 'warning');
-        state.guest = f;
         state.step = 3; render();
       };
     }
@@ -646,7 +655,7 @@ const B = (() => {
   /* ================= REVIEW FORM ================= */
   async function reviewsEligible() {
     const main = document.getElementById('main');
-    if (!API.getUser()) { G.openAuth('login', '#/reviews-eligible'); return; }
+    if (!API.getUser()) { G.openAuth('login', '#/write-review'); return; }
     const d = await API.get('/api/reviews/eligible');
     main.innerHTML = `<div style="height:var(--nav-h)"></div>
       <section class="section" style="padding-top:40px"><div class="wrap" style="max-width:860px">

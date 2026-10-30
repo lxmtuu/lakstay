@@ -5,7 +5,9 @@ import cookieParser from 'cookie-parser';
 import { config } from './config/index.js';
 import { fromHere } from './utils/paths.js';
 import { requestContext, errorHandler, apiNotFound, rateLimit } from './middlewares/error.js';
-import { ok, clientIp } from './utils/http.js';
+import { ok, maskPhone } from './utils/http.js';
+import { dmyVN } from './utils/format.js';
+import { STATUS_META } from './services/booking-state.js';
 import { db } from './db.js';
 
 import authRoutes from './modules/auth/auth.routes.js';
@@ -18,10 +20,11 @@ import loyaltyRoutes from './modules/loyalty/loyalty.routes.js';
 
 export function createApp() {
   const app = express();
-  app.set('trust proxy', 1); // đứng sau reverse proxy (nginx) thì cần để lấy đúng IP
+  app.set('trust proxy', config.trustProxy); // đứng sau reverse proxy (nginx) thì cần để lấy đúng IP
   app.disable('x-powered-by');
 
   /* ---------------- SECURITY HEADERS ---------------- */
+  const allowIframePreview = process.env.ALLOW_IFRAME_PREVIEW === '1';
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
@@ -32,13 +35,14 @@ export function createApp() {
         imgSrc: ["'self'", 'data:', 'blob:', 'https://img.vietqr.io', 'https://images.unsplash.com'],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
-        frameAncestors: ["'self'"],
+        frameAncestors: allowIframePreview ? ["'self'", 'https:'] : ["'self'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
       },
     },
+    frameguard: allowIframePreview ? false : { action: 'sameorigin' },
     crossOriginEmbedderPolicy: false,
-    crossOriginResourcePolicy: { policy: 'same-site' },
+    crossOriginResourcePolicy: { policy: allowIframePreview ? 'cross-origin' : 'same-site' },
     referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   }));
 
@@ -125,6 +129,65 @@ export function createApp() {
   app.use('/api/reviews', reviewRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/loyalty', loyaltyRoutes);
+
+  /* ---------------- VOUCHER QR VERIFICATION (/verify/:code) ---------------- */
+  const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+  const maskGuestName = (n = '') => {
+    const parts = String(n).trim().split(/\s+/);
+    if (parts.length <= 1) return n;
+    return `${parts[0]} ${parts.slice(1, -1).map((x) => `${x[0] || ''}.`).join(' ')} ${parts[parts.length - 1]}`.replace(/\s+/g, ' ');
+  };
+
+  app.get('/verify/:code',
+    rateLimit({ windowMs: 60_000, max: 30, keyPrefix: 'verify' }),
+    (req, res) => {
+      const code = String(req.params.code || '').trim().toUpperCase();
+      const b = /^[A-Z0-9-]{4,20}$/.test(code)
+        ? db.prepare(`SELECT id, code, status, check_in, check_out, nights, guests, guest_name, guest_phone
+                      FROM bookings WHERE code = ?`).get(code)
+        : null;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      if (!b) {
+        return res.status(404).send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>Xác thực phiếu — LakStay</title></head>
+          <body style="margin:0;background:#f4f2ec;font-family:system-ui,-apple-system,sans-serif;padding:32px 16px">
+            <div style="max-width:460px;margin:auto;background:#fff;border-radius:16px;padding:28px;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center">
+              <h2 style="color:#b0413e;margin:0 0 8px">Không tìm thấy mã đặt phòng</h2>
+              <p style="color:#5b6770;font-size:14px">Mã <b>${escHtml(code)}</b> không tồn tại trong hệ thống LakStay.</p>
+              <a href="/" style="display:inline-block;margin-top:14px;color:#0c3527;font-weight:600">Về trang chủ</a>
+            </div></body></html>`);
+      }
+      const lines = db.prepare(`
+        SELECT br.qty, rt.name_vi FROM booking_rooms br
+        JOIN room_types rt ON rt.id = br.room_type_id WHERE br.booking_id = ?`).all(b.id);
+      const st = STATUS_META[b.status] || { vi: b.status };
+      const valid = ['CONFIRMED', 'CHECKED_IN', 'COMPLETED'].includes(b.status);
+      return res.send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Xác thực ${escHtml(b.code)} — LakStay</title></head>
+        <body style="margin:0;background:#f4f2ec;font-family:system-ui,-apple-system,sans-serif;padding:32px 16px;color:#15201a">
+          <div style="max-width:480px;margin:auto;background:#fffdf7;border-radius:16px;overflow:hidden;box-shadow:0 10px 32px rgba(12,53,39,.12)">
+            <div style="background:#0c3527;color:#fff;padding:22px 26px">
+              <div style="font-size:20px;font-weight:700">LakStay <span style="color:#e3c47e;font-size:11px;letter-spacing:2px">XÁC THỰC VOUCHER</span></div>
+              <div style="margin-top:6px;font-size:13px;color:#cfd8d3">Mã đặt phòng: <b>${escHtml(b.code)}</b></div>
+            </div>
+            <div style="padding:24px 26px;font-size:14px;line-height:1.6">
+              <div style="padding:10px 14px;border-radius:10px;font-weight:700;margin-bottom:16px;background:${valid ? '#e6f4ee' : '#fdf3dc'};color:${valid ? '#1d6a4e' : '#8a6116'}">
+                ${valid ? '✓ Phiếu hợp lệ' : '• Trạng thái'} — ${escHtml(st.vi)}
+              </div>
+              <div><b>Khách lưu trú:</b> ${escHtml(maskGuestName(b.guest_name))} (${escHtml(maskPhone(b.guest_phone))})</div>
+              <div><b>Nhận phòng:</b> ${escHtml(dmyVN(b.check_in))} (từ 14:00)</div>
+              <div><b>Trả phòng:</b> ${escHtml(dmyVN(b.check_out))} (trước 12:00) · ${Number(b.nights)} đêm · ${Number(b.guests)} khách</div>
+              <div><b>Hạng phòng:</b> ${escHtml(lines.map((l) => `${l.qty}× ${l.name_vi}`).join(', '))}</div>
+              <div style="margin-top:20px;padding-top:14px;border-top:1px solid #efe6d6;display:flex;justify-content:space-between;font-size:13px">
+                <a href="/" style="color:#0c3527;text-decoration:none;font-weight:600">← Trang chủ</a>
+                <a href="/admin.html#/bookings?q=${encodeURIComponent(b.code)}" style="color:#0c3527;text-decoration:none;font-weight:600">Mở trong Lễ tân →</a>
+              </div>
+            </div>
+          </div></body></html>`);
+    });
 
   /* ---------------- STATIC FRONTEND ---------------- */
   const publicDir = fromHere(import.meta.url, '..', 'public');

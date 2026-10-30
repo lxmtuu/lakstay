@@ -5,7 +5,7 @@ import { validate } from '../../middlewares/validate.js';
 import { optionalAuth } from '../../middlewares/auth.js';
 import { asyncHandler, ok, sanitize, paginate, pageMeta } from '../../utils/http.js';
 import { Errors } from '../../utils/errors.js';
-import { isValidDateString, todayISO, addDays } from '../../utils/date.js';
+import { isValidDateString, todayISO, addDays, diffDays } from '../../utils/date.js';
 import { searchAvailability, getInventoryByDate, countAvailable } from '../../services/availability.service.js';
 import { quoteBooking, quoteLine, monthPriceCalendar } from '../../services/pricing.service.js';
 import { cancellationPreview } from '../../services/cancellation.service.js';
@@ -103,7 +103,7 @@ router.get('/', optionalAuth, validate(listQuery, 'query'), asyncHandler(async (
 
   ok(res, {
     items: paged,
-    search: { check_in: ci, check_out: co, guests, nights: hasDates ? Math.round((new Date(co) - new Date(ci)) / 86400000) : 1 },
+    search: { check_in: ci, check_out: co, guests, nights: hasDates ? diffDays(ci, co) : 1 },
   }, pageMeta(pg, total));
 }));
 
@@ -167,18 +167,19 @@ const quoteSchema = z.object({
 router.post('/quote', optionalAuth, validate(quoteSchema), asyncHandler(async (req, res) => {
   const { checkIn, checkOut, guests, lines, couponCode } = req.body;
   const quote = quoteBooking({
-    // quoteBooking/quoteLine cần ngày trên TỪNG line (1 booking có thể có nhiều kỳ khác nhau
-    // nếu sau này mở rộng); ở đây mọi line dùng chung kỳ ở của booking.
-    lines: lines.map((l) => ({ ...l, checkIn, checkOut })),
+    lines,
+    guests,
+    checkIn,
+    checkOut,
     couponCode,
     userId: req.user?.id,
   });
 
-  // Gắn số phòng còn trống để UI disable nút đặt nếu hết
+  // Gắn số phòng còn trống để UI disable nút đặt nếu hết (l.qty đã gộp các line cùng room_type_id)
   quote.availability = quote.lines.map((l) => ({
     room_type_id: l.room_type_id,
     available: countAvailable(l.room_type_id, checkIn, checkOut),
-    requested: lines.find((x) => x.roomTypeId === l.room_type_id)?.qty || 1,
+    requested: l.qty,
   }));
   quote.check_in = checkIn;
   quote.check_out = checkOut;
@@ -189,7 +190,7 @@ router.post('/quote', optionalAuth, validate(quoteSchema), asyncHandler(async (r
 /** GET /api/rooms/meta/price-calendar?month=YYYY-MM[&roomTypeId=] — ngày rẻ nhất trong tháng */
 router.get('/meta/price-calendar', asyncHandler(async (req, res) => {
   const cal = monthPriceCalendar({
-    month: String(req.query.month || new Date().toISOString().slice(0, 7)),
+    month: String(req.query.month || todayISO().slice(0, 7)),
     roomTypeId: req.query.roomTypeId ? String(req.query.roomTypeId) : null,
   });
   ok(res, cal);

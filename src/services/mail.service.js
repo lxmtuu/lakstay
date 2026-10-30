@@ -3,8 +3,13 @@ import path from 'node:path';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { fmtVND, dmyVN, fmtDateTimeVN } from '../utils/format.js';
+import { Errors } from '../utils/errors.js';
 import { fromHere } from '../utils/paths.js';
 import { STATUS_META } from './booking-state.js';
+
+const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c]));
 
 /**
  * ============================================================================
@@ -19,7 +24,9 @@ import { STATUS_META } from './booking-state.js';
  * ============================================================================
  */
 
-const OUTBOX = fromHere(import.meta.url, '..', 'data', 'outbox');
+const OUTBOX = process.env.OUTBOX_DIR
+  ? path.resolve(process.env.OUTBOX_DIR)
+  : (config.isVercel ? '/tmp/lakstay-outbox' : fromHere(import.meta.url, '..', 'data', 'outbox'));
 fs.mkdirSync(OUTBOX, { recursive: true });
 
 let transporterPromise = null;
@@ -78,7 +85,7 @@ export async function sendMail({ to, subject, html, attachments = [] }) {
 
 const wrapPreview = (to, subject, html) => `<!doctype html><html><head><meta charset="utf-8">
 <div style="font:12px/1.5 system-ui;background:#f4f2ec;padding:10px 14px;color:#555">
-  <b>To:</b> ${to} &nbsp;·&nbsp; <b>Subject:</b> ${subject} &nbsp;·&nbsp; (bản xem trước ở outbox dev)
+  <b>To:</b> ${escHtml(to)} &nbsp;·&nbsp; <b>Subject:</b> ${escHtml(subject)} &nbsp;·&nbsp; (bản xem trước ở outbox dev)
 </div></head><body style="margin:0">${html}</body></html>`;
 
 /* ============================= TEMPLATES ============================= */
@@ -88,7 +95,7 @@ const shell = (title, body) => `
   <div style="max-width:620px;margin:auto;background:#fffdf7;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(12,53,39,.12)">
     <div style="background:#0c3527;padding:26px 30px;color:#fff">
       <div style="font-size:22px;font-weight:700">LakStay <span style="color:#e3c47e;font-size:11px;letter-spacing:3px">ĐÀ LẠT</span></div>
-      <div style="margin-top:6px;font-size:13px;color:#cfd8d3">${title}</div>
+      <div style="margin-top:6px;font-size:13px;color:#cfd8d3">${escHtml(title)}</div>
     </div>
     <div style="padding:28px 30px;color:#15201a;font-size:14px;line-height:1.65">${body}</div>
     <div style="background:#0c3527;padding:16px 30px;color:#9fb3a8;font-size:11px">
@@ -101,27 +108,27 @@ const shell = (title, body) => `
 const kv = (rows) => `
 <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
   ${rows.map(([k, v]) => `<tr>
-    <td style="padding:7px 10px;color:#6b7a71;border-bottom:1px solid #efe6d6;width:42%">${k}</td>
+    <td style="padding:7px 10px;color:#6b7a71;border-bottom:1px solid #efe6d6;width:42%">${escHtml(k)}</td>
     <td style="padding:7px 10px;font-weight:600;border-bottom:1px solid #efe6d6">${v}</td></tr>`).join('')}
 </table>`;
 
 const btn = (href, label, gold = true) => `
-<a href="${href}" style="display:inline-block;margin-top:18px;padding:12px 26px;border-radius:999px;text-decoration:none;font-weight:700;font-size:14px;
-   background:${gold ? 'linear-gradient(135deg,#c9a24b,#e3c47e)' : '#0c3527'};color:${gold ? '#3a2c0d' : '#fff'}">${label}</a>`;
+<a href="${escHtml(href)}" style="display:inline-block;margin-top:18px;padding:12px 26px;border-radius:999px;text-decoration:none;font-weight:700;font-size:14px;
+   background:${gold ? 'linear-gradient(135deg,#c9a24b,#e3c47e)' : '#0c3527'};color:${gold ? '#3a2c0d' : '#fff'}">${escHtml(label)}</a>`;
 
 export const templates = {
   booking_hold({ booking, url }) {
     return {
       subject: `[LakStay] Giữ chỗ thành công — mã ${booking.code}`,
       html: shell('Chúng tôi đã giữ phòng cho bạn', `
-        <p>Xin chào <b>${booking.guest_name}</b>,</p>
+        <p>Xin chào <b>${escHtml(booking.guest_name)}</b>,</p>
         <p>Yêu cầu đặt phòng của bạn đã được ghi nhận và <b>giữ chỗ trong 15 phút</b>.
            Hoàn tất thanh toán trong thời gian này để xác nhận chính thức.</p>
         ${kv([
-          ['Mã đặt phòng', `<b style="color:#0c3527">${booking.code}</b>`],
-          ['Kỳ nghỉ', `${dmyVN(booking.check_in)} → ${dmyVN(booking.check_out)} (${booking.nights} đêm)`],
-          ['Số khách', booking.guests],
-          ['Tổng tạm tính', `<b>${fmtVND(booking.total_amount)}</b>`],
+          ['Mã đặt phòng', `<b style="color:#0c3527">${escHtml(booking.code)}</b>`],
+          ['Kỳ nghỉ', `${escHtml(dmyVN(booking.check_in))} → ${escHtml(dmyVN(booking.check_out))} (${Number(booking.nights)} đêm)`],
+          ['Số khách', Number(booking.guests)],
+          ['Tổng tạm tính', `<b>${escHtml(fmtVND(booking.total_amount))}</b>`],
         ])}
         ${btn(url, 'Thanh toán ngay')}
         <p style="color:#6b7a71;font-size:12px;margin-top:20px">Quá thời gian giữ chỗ mà chưa thanh toán, hệ thống sẽ tự động nhả phòng cho khách khác.</p>`),
@@ -132,15 +139,15 @@ export const templates = {
     return {
       subject: `[LakStay] XÁC NHẬN đặt phòng ${booking.code} — hẹn gặp bạn ở Đà Lạt!`,
       html: shell('Đặt phòng đã được xác nhận', `
-        <p>Xin chào <b>${booking.guest_name}</b>,</p>
+        <p>Xin chào <b>${escHtml(booking.guest_name)}</b>,</p>
         <p>Cảm ơn bạn đã thanh toán. Đặt phòng của bạn đã <b>xác nhận thành công</b>.
            Phiếu xác nhận (voucher) đính kèm email này — hãy xuất trình khi làm thủ tục.</p>
         ${kv([
-          ['Mã đặt phòng', `<b style="color:#0c3527">${booking.code}</b>`],
-          ['Nhận phòng', `${dmyVN(booking.check_in)} từ 14:00`],
-          ['Trả phòng', `${dmyVN(booking.check_out)} trước 12:00`],
-          ['Hạng phòng', (booking.lines || []).map((l) => `${l.qty}× ${l.room_type_name || l.name_vi}`).join(', ')],
-          ['Đã thanh toán', `<b style="color:#1d6a4e">${fmtVND(booking.paid_amount ?? booking.total_amount)}</b>`],
+          ['Mã đặt phòng', `<b style="color:#0c3527">${escHtml(booking.code)}</b>`],
+          ['Nhận phòng', `${escHtml(dmyVN(booking.check_in))} từ 14:00`],
+          ['Trả phòng', `${escHtml(dmyVN(booking.check_out))} trước 12:00`],
+          ['Hạng phòng', escHtml((booking.lines || []).map((l) => `${l.qty}× ${l.room_type_name || l.name_vi}`).join(', '))],
+          ['Đã thanh toán', `<b style="color:#1d6a4e">${escHtml(fmtVND(booking.paid_amount ?? booking.total_amount))}</b>`],
         ])}
         ${btn(url, 'Xem chi tiết đặt phòng')}
         <p style="color:#6b7a71;font-size:12px;margin-top:20px">Cần thay đổi? Bạn có thể huỷ miễn phí trước mốc chính sách trong trang "Đặt phòng của tôi".</p>`),
@@ -151,13 +158,13 @@ export const templates = {
     return {
       subject: `[LakStay] Đã huỷ đặt phòng ${booking.code}`,
       html: shell('Thông báo huỷ đặt phòng', `
-        <p>Xin chào <b>${booking.guest_name}</b>,</p>
-        <p>Đặt phòng <b>${booking.code}</b> (${dmyVN(booking.check_in)} → ${dmyVN(booking.check_out)}) đã được huỷ theo yêu cầu.</p>
+        <p>Xin chào <b>${escHtml(booking.guest_name)}</b>,</p>
+        <p>Đặt phòng <b>${escHtml(booking.code)}</b> (${escHtml(dmyVN(booking.check_in))} → ${escHtml(dmyVN(booking.check_out))}) đã được huỷ theo yêu cầu.</p>
         ${kv([
-          ['Trạng thái', STATUS_META[booking.status]?.vi || booking.status],
-          ['Số tiền hoàn', `<b style="color:${refund?.refund_amount ? '#1d6a4e' : '#c0392b'}">${fmtVND(refund?.refund_amount || 0)}</b>`],
-          ['Phí huỷ', fmtVND(refund?.penalty || 0)],
-          ['Ghi chú', refund?.message || ''],
+          ['Trạng thái', escHtml(STATUS_META[booking.status]?.vi || booking.status)],
+          ['Số tiền hoàn', `<b style="color:${refund?.refund_amount ? '#1d6a4e' : '#c0392b'}">${escHtml(fmtVND(refund?.refund_amount || 0))}</b>`],
+          ['Phí huỷ', escHtml(fmtVND(refund?.penalty || 0))],
+          ['Ghi chú', escHtml(refund?.message || '')],
         ])}
         <p style="color:#6b7a71;font-size:12px">Tiền hoàn (nếu có) sẽ về tài khoản đã thanh toán trong 3–5 ngày làm việc.</p>
         ${btn(url, 'Xem lại đặt phòng', false)}`),
@@ -192,9 +199,15 @@ export function listOutbox() {
 }
 
 export function readOutbox(id, file = 'email.html') {
-  const safe = String(id).replace(/[^a-z0-9_-]/gi, '');
-  const p = path.join(OUTBOX, safe, String(file).replace(/[^a-z0-9._-]/gi, ''));
-  if (!p.startsWith(OUTBOX)) throw new Error('Đường dẫn không hợp lệ');
+  const safe = String(id || '').replace(/[^a-z0-9_-]/gi, '');
+  const safeFile = String(file || '').replace(/[^a-z0-9._-]/gi, '');
+  if (!safe || !safeFile || safeFile === '.' || safeFile === '..') {
+    throw Errors.badRequest('Đường dẫn không hợp lệ');
+  }
+  const root = path.resolve(OUTBOX);
+  const p = path.resolve(root, safe, safeFile);
+  if (!p.startsWith(root + path.sep)) throw Errors.badRequest('Đường dẫn không hợp lệ');
+  if (!fs.existsSync(p)) throw Errors.notFound('Không tìm thấy nội dung outbox');
   return fs.readFileSync(p);
 }
 

@@ -15,7 +15,7 @@ const UI = (() => {
   const dtVN = (s) => s ? s.replace('T', ' ').slice(0, 16).replace(/(\d{4})-(\d{2})-(\d{2}) /, '$3/$2/$1 ') : '';
   const iso = (d) => (d instanceof Date ? d : new Date(d)).toISOString().slice(0, 10);
   const addDays = (isoStr, n) => { const d = new Date(isoStr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
-  const today = () => iso(new Date());
+  const today = () => iso(new Date(Date.now() + 7 * 3600_000)); // múi giờ khách sạn Đà Lạt (UTC+7)
   const nights = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const initials = (name) => String(name || '?').trim().split(/\s+/).slice(-2).map((w) => w[0]).join('').toUpperCase();

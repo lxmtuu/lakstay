@@ -1,6 +1,6 @@
 import { createApp } from './app.js';
 import { config } from './config/index.js';
-import { initSchema } from './db.js';
+import { db, initSchema } from './db.js';
 import { startJobs } from './jobs.js';
 import { logger } from './utils/logger.js';
 
@@ -19,37 +19,45 @@ if (config.isProd) {
 }
 
 initSchema();
+if (config.isVercel && db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0) {
+  const { seedDatabase } = await import('../db/seed.js');
+  await seedDatabase({ silent: true });
+}
 
 const app = createApp();
-const server = app.listen(config.port, config.host, () => {
-  logger.info(`${config.app.name} API sẵn sàng`, {
-    url: `http://localhost:${config.port}`,
-    env: config.env,
-    db: config.db.file,
+
+if (!config.isVercel) {
+  const server = app.listen(config.port, config.host, () => {
+    logger.info(`${config.app.name} API sẵn sàng`, {
+      url: `http://localhost:${config.port}`,
+      env: config.env,
+      db: config.db.file,
+    });
   });
-});
 
-const jobs = startJobs();
+  const jobs = startJobs();
 
-/* Graceful shutdown — tránh mất dữ liệu / kết nối treo khi deploy lại */
-function shutdown(signal) {
-  logger.info(`${signal} received — shutting down`);
-  jobs.stop();
-  server.close(() => {
-    try { require_db_close(); } catch {}
-    logger.info('Server closed');
-    process.exit(0);
+  /* Graceful shutdown — tránh mất dữ liệu / kết nối treo khi deploy lại */
+  let shuttingDown = false;
+  function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`${signal} received — shutting down`);
+    jobs.stop();
+    server.close(() => {
+      try { db.close(); } catch { /* ignore */ }
+      logger.info('Server closed');
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  }
+
+  ['SIGINT', 'SIGTERM'].forEach((s) => process.on(s, () => shutdown(s)));
+  process.on('unhandledRejection', (reason) => logger.error('unhandledRejection', { reason: String(reason) }));
+  process.on('uncaughtException', (err) => {
+    logger.error('uncaughtException', { err: err.stack || err.message });
+    shutdown('uncaughtException');
   });
-  setTimeout(() => process.exit(1), 10_000).unref();
-}
-function require_db_close() {
-  // dynamic import để tránh vòng lặp
-  import('./db.js').then(({ db }) => db.close());
 }
 
-['SIGINT', 'SIGTERM'].forEach((s) => process.on(s, () => shutdown(s)));
-process.on('unhandledRejection', (reason) => logger.error('unhandledRejection', { reason: String(reason) }));
-process.on('uncaughtException', (err) => {
-  logger.error('uncaughtException', { err: err.stack || err.message });
-  shutdown('uncaughtException');
-});
+export default app;

@@ -9,6 +9,7 @@
  */
 
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const VN_OFFSET_MS = 7 * 3_600_000; // Asia/Ho_Chi_Minh (UTC+7, không có DST)
 
 export function isValidDateString(s) {
   if (typeof s !== 'string' || !DATE_RE.test(s)) return false;
@@ -24,8 +25,14 @@ export function parseDate(s) {
   return new Date(`${s}T00:00:00Z`);
 }
 
-export function todayISO() {
-  return toISODate(new Date());
+/** Ngày hiện tại theo múi giờ khách sạn Đà Lạt (UTC+7) */
+export function todayISO(now = new Date()) {
+  return toISODate(new Date(now.getTime() + VN_OFFSET_MS));
+}
+
+/** Giờ hiện tại (0..23) theo múi giờ Việt Nam (UTC+7) */
+export function currentHourVN(now = new Date()) {
+  return new Date(now.getTime() + VN_OFFSET_MS).getUTCHours();
 }
 
 export function addDays(iso, days) {

@@ -16,15 +16,29 @@ const DEV_SECRETS = new Set([
   'dev-webhook-secret', 'dev-webhook-secret-change-me',
 ]);
 
+const parseTrustProxy = (v) => {
+  if (v === undefined || v === '') return 1;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : v;
+};
+
+const isVercel = Boolean(process.env.VERCEL);
+const vercelHost = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || '';
+
 export const config = {
   env: process.env.NODE_ENV || 'development',
   isProd: process.env.NODE_ENV === 'production',
+  isVercel,
+  demoMode: ['1', 'true'].includes(String(process.env.DEMO_MODE || '').toLowerCase()),
   port: Number(process.env.PORT || 3000),
   host: process.env.HOST || '0.0.0.0',
-  publicUrl: process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`,
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+  publicUrl: process.env.PUBLIC_URL || (vercelHost ? `https://${vercelHost}` : `http://localhost:${process.env.PORT || 3000}`),
 
   db: {
-    file: process.env.DB_FILE || fromHere(import.meta.url, '..', 'data', 'lakstay.db'),
+    file: process.env.DB_FILE || (isVercel ? '/tmp/lakstay.db' : fromHere(import.meta.url, '..', 'data', 'lakstay.db')),
   },
 
   jwt: {

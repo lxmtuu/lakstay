@@ -97,6 +97,12 @@ CREATE TRIGGER IF NOT EXISTS trg_rooms_count_ad AFTER DELETE ON rooms BEGIN
   UPDATE room_types SET total_rooms = (SELECT COUNT(*) FROM rooms WHERE room_type_id = OLD.room_type_id)
   WHERE id = OLD.room_type_id;
 END;
+CREATE TRIGGER IF NOT EXISTS trg_rooms_count_au AFTER UPDATE OF room_type_id ON rooms BEGIN
+  UPDATE room_types SET total_rooms = (SELECT COUNT(*) FROM rooms WHERE room_type_id = OLD.room_type_id)
+  WHERE id = OLD.room_type_id;
+  UPDATE room_types SET total_rooms = (SELECT COUNT(*) FROM rooms WHERE room_type_id = NEW.room_type_id)
+  WHERE id = NEW.room_type_id;
+END;
 
 -- Giá theo mùa / theo ngày cụ thể (override base_price)
 CREATE TABLE IF NOT EXISTS price_rules (

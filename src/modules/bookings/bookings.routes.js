@@ -5,10 +5,10 @@ import { validate } from '../../middlewares/validate.js';
 import { requireAuth, assertOwnershipOrStaff } from '../../middlewares/auth.js';
 import { rateLimit } from '../../middlewares/error.js';
 import { config } from '../../config/index.js';
-import { asyncHandler, ok, created, paginate, pageMeta } from '../../utils/http.js';
+import { asyncHandler, ok, created, paginate, pageMeta, clientIp } from '../../utils/http.js';
 import { Errors } from '../../utils/errors.js';
 import { isValidDateString } from '../../utils/date.js';
-import { createBooking, getBookingById, cancelBooking, listBookings, transitionBooking } from '../../services/booking.service.js';
+import { createBooking, getBookingById, cancelBooking, bookingCancelPolicy, listBookings, transitionBooking } from '../../services/booking.service.js';
 import { computeRefund, hoursUntilCheckIn } from '../../services/cancellation.service.js';
 import { nextStates, STATUS_META } from '../../services/booking-state.js';
 import { audit } from '../../services/audit.service.js';
@@ -45,7 +45,12 @@ const cancelSchema = z.object({
 
 /** POST /api/bookings — tạo booking (idempotent qua header Idempotency-Key) */
 router.post('/',
-  rateLimit({ windowMs: config.rateLimit.bookingWindowMs, max: config.rateLimit.bookingMax, keyPrefix: 'booking' }),
+  rateLimit({
+    windowMs: config.rateLimit.bookingWindowMs,
+    max: config.rateLimit.bookingMax,
+    keyPrefix: 'booking',
+    keyFn: (req) => req.user?.id || clientIp(req),
+  }),
   validate(createSchema),
   asyncHandler(async (req, res) => {
     const idemKey = req.headers['idempotency-key'];
@@ -149,6 +154,7 @@ router.post('/:id/cancel', validate(cancelSchema), asyncHandler(async (req, res)
   ok(res, {
     booking_id: booking.id,
     status: result.status,
+    booking_status: refund?.booking_status || result.status,
     refund: result.refund,
     refund_transaction: refund,
     released_room_nights: result.released_room_nights,
@@ -161,9 +167,7 @@ router.get('/:id/cancel-policy', asyncHandler(async (req, res) => {
   if (!booking) throw Errors.notFound('Không tìm thấy booking');
   assertOwnershipOrStaff(booking, req.user);
 
-  const firstLine = booking.lines[0];
-  const rt = db.prepare(`SELECT cancel_free_hours, cancel_penalty_pct, cancel_no_refund_hours
-                         FROM room_types WHERE id = ?`).get(firstLine.room_type_id);
+  const rt = bookingCancelPolicy(booking.id);
   const paid = booking.paid_amount || 0;
   const refund = computeRefund({
     check_in: booking.check_in, nights: booking.nights, subtotal: booking.subtotal,

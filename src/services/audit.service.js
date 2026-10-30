@@ -41,13 +41,23 @@ export function securityEvent({ type, severity = 'warn', ip, userAgent, email, d
   }
 }
 
-export const listAudit = ({ entityType, entityId, actorId, limit = 50, offset = 0 } = {}) => {
+function buildAuditWhere({ action, entityType, entityId, actorId } = {}) {
   const where = [];
   const params = [];
+  if (action) { where.push('action = ?'); params.push(action); }
   if (entityType) { where.push('entity_type = ?'); params.push(entityType); }
   if (entityId) { where.push('entity_id = ?'); params.push(entityId); }
   if (actorId) { where.push('actor_id = ?'); params.push(actorId); }
-  const sql = `SELECT * FROM audit_logs ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-               ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-  return db.prepare(sql).all(...params, limit, offset);
+  return { whereSql: where.length ? 'WHERE ' + where.join(' AND ') : '', params };
+}
+
+export const listAudit = ({ action, entityType, entityId, actorId, limit = 50, offset = 0 } = {}) => {
+  const { whereSql, params } = buildAuditWhere({ action, entityType, entityId, actorId });
+  return db.prepare(`SELECT * FROM audit_logs ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset);
+};
+
+export const countAudit = (filters = {}) => {
+  const { whereSql, params } = buildAuditWhere(filters);
+  return db.prepare(`SELECT COUNT(*) n FROM audit_logs ${whereSql}`).get(...params).n;
 };

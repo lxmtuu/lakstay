@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * SMOKE TEST end-to-end bằng fetch thật (cần server đang chạy ở :3000).
- *   npm run smoke
+ *   npm run test:smoke
  */
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET || 'dev-webhook-secret';
 let pass = 0, fail = 0;
 const log = [];
 
@@ -13,7 +14,11 @@ function check(name, cond, extra = '') {
 }
 
 const iso = (d) => d.toISOString().slice(0, 10);
-const addDays = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+const addDays = (n) => {
+  const vnNow = new Date(Date.now() + 7 * 3_600_000);
+  vnNow.setUTCDate(vnNow.getUTCDate() + n);
+  return iso(vnNow);
+};
 
 // cookie jar đơn giản
 function jar() {
@@ -160,7 +165,7 @@ async function main() {
 
   /* ---------- 11. Webhook đúng chữ ký => booking CONFIRMED ---------- */
   const crypto = await import('node:crypto');
-  const sig = crypto.createHmac('sha256', 'dev-webhook-secret').update(whBody).digest('hex');
+  const sig = crypto.createHmac('sha256', WEBHOOK_SECRET).update(whBody).digest('hex');
   res = await fetch(`${BASE}/api/payments/webhook/VIETQR`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-signature': sig }, body: whBody,
   });
@@ -298,8 +303,9 @@ async function main() {
   check('export CSV doanh thu', r.status === 200);
 
   /* ---------- 21b. Bộ lọc nâng cao ---------- */
-  r = await api(cj, 'GET', '/api/rooms?amenities=' + encodeURIComponent('hồ bơi nước ấm riêng') + '&limit=20');
-  check('lọc theo tiện nghi chỉ trả villa', r.body.data.items.every((x) => (x.amenities || []).some((a) => /hồ bơi/i.test(a))));
+  r = await api(cj, 'GET', '/api/rooms?amenities=' + encodeURIComponent('bồn tắm panorama rừng thông') + '&limit=20');
+  check('lọc theo tiện nghi trả đúng hạng Grand Suite rừng thông',
+    r.body.data.items.length === 1 && r.body.data.items.every((x) => (x.amenities || []).some((a) => /rừng thông/i.test(a))));
 
   r = await api(cj, 'GET', '/api/rooms?minRating=4.5&limit=20');
   check('lọc theo điểm đánh giá', r.body.data.items.every((x) => !x.rating || x.rating >= 4.5));
@@ -400,9 +406,60 @@ async function main() {
     const d = r.body.data;
     return d.totals.revenue === d.revenue_series.reduce((s2, x) => s2 + x.revenue, 0);
   })());
-  r = await api(jar(), 'GET', '/api/rooms?limit=3');
+  r = await api(jar(), 'GET', '/api/rooms?limit=6');
   check('rooms trả name_en + description_en cho i18n',
     r.body.data.items.every((x) => !!x.name_en && !!x.description_en));
+  check('mỗi hạng phòng có bộ 4 ảnh thực tế (gallery)',
+    r.body.data.items.every((x) => Array.isArray(x.images) && x.images.length >= 4));
+  {
+    const sampleImg = r.body.data.items[0].images[1];
+    const imgRes = await fetch(`${BASE}${sampleImg}`);
+    check('ảnh phòng trong gallery tải được (200 image/jpeg)',
+      imgRes.status === 200 && (imgRes.headers.get('content-type') || '').includes('image/jpeg'));
+  }
+
+  /* ---------- 21k. Regression checks: RBAC refund, partial payment guard, admin review moderation, QR verify ---------- */
+  r = await api(sj, 'POST', `/api/payments/${booking.id}/refund`, { amount: 100_000, reason: 'Staff thử hoàn tiền' }, { 'x-csrf-token': scsrf });
+  check('staff không được phép hoàn tiền trực tiếp (403)', r.status === 403, `got ${r.status}`);
+
+  {
+    const ciP = addDays(82), coP = addDays(84);
+    const rBk = await api(cj, 'POST', '/api/bookings', {
+      checkIn: ciP, checkOut: coP, guests: 2,
+      guestName: 'Test <script>alert(1)</script>', guestEmail: 'khach@example.com', guestPhone: '0909123456',
+      lines: [{ roomTypeId: deluxe.id, qty: 1 }],
+    }, { 'x-csrf-token': csrf });
+    const bkP = rBk.body.data?.booking;
+    check('tạo booking kiểm tra partial payment & XSS outbox', rBk.status === 201 && !!bkP);
+    const rPartial = await api(cj, 'POST', '/api/payments', { bookingId: bkP.id, provider: 'VIETQR', amount: 10_000 }, { 'x-csrf-token': csrf });
+    check('chặn khách hàng tự truyền số tiền thanh toán một phần (400)', rPartial.status === 400);
+    await api(cj, 'POST', `/api/bookings/${bkP.id}/cancel`, { reason: 'Dọn dữ liệu test' }, { 'x-csrf-token': csrf });
+  }
+
+  r = await api(aj0, 'GET', '/api/admin/outbox');
+  {
+    const xssMail = r.body.data.items.find((m) => m.id);
+    const rawRes = await fetch(`${BASE}/api/admin/outbox/${xssMail.id}`, { headers: { Cookie: aj0.header() } });
+    const cspHdr = rawRes.headers.get('content-security-policy') || '';
+    check('outbox preview có header CSP sandbox chống XSS', cspHdr.includes('sandbox'));
+  }
+
+  r = await api(aj0, 'GET', '/api/admin/reviews?status=all');
+  check('admin xem danh sách kiểm duyệt đánh giá (/api/admin/reviews)',
+    r.status === 200 && Array.isArray(r.body.data.items) && typeof r.body.data.summary.pending === 'number');
+
+  r = await api(aj0, 'GET', '/api/admin/loyalty?tier=MEMBER');
+  check('lọc hạng MEMBER bao gồm cả user chưa phát sinh bản ghi loyalty_accounts',
+    r.status === 200 && r.body.data.items.length >= 2);
+
+  r = await api(aj0, 'GET', '/api/admin/audit-logs?action=USER_LOGIN&limit=5');
+  check('audit-logs lọc đúng theo action + trả tổng số bản ghi thực',
+    r.status === 200 && r.body.data.items.every((a) => a.action === 'USER_LOGIN') && r.body.meta?.total >= r.body.data.items.length);
+
+  res = await fetch(`${BASE}/verify/${encodeURIComponent(booking.code)}`);
+  check('trang xác thực QR voucher /verify/:code trả 200', res.status === 200);
+  res = await fetch(`${BASE}/verify/LKS-99999999-NONE`);
+  check('trang xác thực QR mã không tồn tại trả 404', res.status === 404);
 
   /* ---------- 22. Security headers ---------- */
   res = await fetch(`${BASE}/api/site`);
@@ -415,6 +472,8 @@ async function main() {
   await api(lj, 'GET', '/api/auth/csrf');
   await api(lj, 'POST', '/api/auth/login', { email: 'demo@example.com', password: PWD });
   const lcsrf = lj.get('lks_csrf');
+  r = await api(lj, 'POST', '/api/auth/refresh');
+  check('refresh thiếu x-csrf-token bị chặn (403)', r.status === 403);
   r = await api(lj, 'POST', '/api/auth/refresh', null, { 'x-csrf-token': lcsrf });
   check('refresh token hoạt động', r.status === 200 && !!r.body.data.accessToken);
   r = await api(lj, 'POST', '/api/auth/logout', null, { 'x-csrf-token': lcsrf });

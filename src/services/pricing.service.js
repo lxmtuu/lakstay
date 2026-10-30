@@ -106,16 +106,91 @@ export function quoteLine({ roomTypeId, checkIn, checkOut, qty = 1, guests = 0 }
 }
 
 /**
+ * Gộp các line trùng roomTypeId và phân bổ số khách hợp lý giữa các line.
+ * Đảm bảo POST /api/rooms/quote và createBooking() luôn tính ra cùng một con số.
+ */
+export function normalizeLines(rawLines, totalGuests = null, { checkIn = null, checkOut = null } = {}) {
+  if (!Array.isArray(rawLines) || !rawLines.length) {
+    throw Errors.badRequest('Phải có ít nhất 1 loại phòng');
+  }
+  const byType = new Map();
+  for (const item of rawLines) {
+    const roomTypeId = item.roomTypeId || item.room_type_id;
+    const qty = Number(item.qty || 1);
+    if (!roomTypeId || qty < 1) throw Errors.badRequest('Thông tin phòng không hợp lệ');
+    const prev = byType.get(roomTypeId);
+    if (prev) {
+      prev.qty += qty;
+      if (item.guests !== undefined && prev.guests !== undefined) prev.guests += Number(item.guests);
+      else prev.guests = undefined;
+    } else {
+      byType.set(roomTypeId, {
+        roomTypeId,
+        qty,
+        checkIn: item.checkIn || checkIn,
+        checkOut: item.checkOut || checkOut,
+        guests: item.guests !== undefined ? Number(item.guests) : undefined,
+      });
+    }
+  }
+
+  const lines = [...byType.values()];
+  if (totalGuests === null || totalGuests === undefined) {
+    return lines.map((l) => ({ ...l, guests: l.guests ?? 0 }));
+  }
+
+  const tg = Number(totalGuests);
+  if (lines.length === 1) {
+    return [{ ...lines[0], guests: lines[0].guests ?? tg }];
+  }
+
+  // Nhiều loại phòng trong cùng 1 đơn:
+  // Nếu client truyền guests riêng từng line hợp lệ (tổng == totalGuests) thì tôn trọng;
+  // ngược lại tự động phân bổ khách vào sức chứa tiêu chuẩn trước rồi mới tới sức chứa phụ thu.
+  const allSpecified = lines.every((l) => l.guests !== undefined);
+  const sumSpecified = allSpecified ? lines.reduce((s, l) => s + l.guests, 0) : -1;
+  if (allSpecified && sumSpecified === tg) return lines;
+
+  const metas = lines.map((l) => {
+    const rt = db.prepare(`SELECT id, name_vi, capacity FROM room_types WHERE id = ? AND is_active = 1`).get(l.roomTypeId);
+    if (!rt) throw Errors.notFound('Loại phòng không tồn tại hoặc đã ngừng kinh doanh');
+    return { line: l, maxCap: rt.capacity * l.qty, stdCap: Math.min(2, rt.capacity) * l.qty };
+  });
+
+  const maxTotalCap = metas.reduce((s, m) => s + m.maxCap, 0);
+  if (tg > maxTotalCap) {
+    throw Errors.badRequest(`Tổng sức chứa tối đa của các phòng đã chọn là ${maxTotalCap} khách (đang chọn ${tg} khách)`);
+  }
+
+  let remaining = tg;
+  const allocated = metas.map((m) => {
+    const g = Math.min(m.stdCap, remaining);
+    remaining -= g;
+    return g;
+  });
+  for (let i = 0; i < metas.length && remaining > 0; i++) {
+    const extraRoom = metas[i].maxCap - allocated[i];
+    const add = Math.min(extraRoom, remaining);
+    allocated[i] += add;
+    remaining -= add;
+  }
+
+  return metas.map((m, i) => ({ ...m.line, guests: allocated[i] }));
+}
+
+/**
  * Tính giá toàn bộ booking (nhiều line) + coupon + thuế phí.
  * Trả về object có thể lưu thẳng vào price_breakdown.
  */
-export function quoteBooking({ lines, couponCode = null, userId = null }) {
+export function quoteBooking({ lines, guests = null, checkIn = null, checkOut = null, couponCode = null, userId = null }) {
   if (!Array.isArray(lines) || !lines.length) throw Errors.badRequest('Phải có ít nhất 1 loại phòng');
-  if (lines.length > config.booking.maxRoomsPerBooking) {
-    throw Errors.badRequest(`Tối đa ${config.booking.maxRoomsPerBooking} loại phòng / lần đặt`);
+  const normalized = normalizeLines(lines, guests, { checkIn, checkOut });
+  const totalRooms = normalized.reduce((s, l) => s + l.qty, 0);
+  if (totalRooms > config.booking.maxRoomsPerBooking) {
+    throw Errors.badRequest(`Tối đa ${config.booking.maxRoomsPerBooking} phòng mỗi lần đặt`);
   }
 
-  const quoted = lines.map((l) => quoteLine(l));
+  const quoted = normalized.map((l) => quoteLine(l));
   const subtotal = quoted.reduce((s, l) => s + l.total, 0);
 
   let discount = 0;

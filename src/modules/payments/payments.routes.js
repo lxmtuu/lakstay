@@ -84,8 +84,8 @@ router.post('/', requireAuth,
       },
       replayed: result.replayed,
       reused: result.reused ?? false,
-      // Endpoint để demo/simulate khi không có cổng thanh toán thật
-      simulate_url: config.env !== 'production' ? `/api/payments/simulate/success?txnRef=${p.txn_ref}` : null,
+      // Endpoint để demo/simulate khi không có cổng thanh toán thật (hoặc bật DEMO_MODE trên preview)
+      simulate_url: (!config.isProd || config.demoMode) ? `/api/payments/simulate/success?txnRef=${p.txn_ref}` : null,
     });
   })
 );
@@ -172,24 +172,24 @@ router.post('/webhook/:provider',
 router.post('/simulate/success',
   requireAuth, requireRole('staff', 'admin', 'customer'),
   asyncHandler(async (req, res) => {
-    if (config.isProd) throw Errors.forbidden('Không khả dụng ở môi trường production');
+    if (config.isProd && !config.demoMode) throw Errors.forbidden('Không khả dụng ở môi trường production');
     const q = z.object({
       txnRef: z.string().optional(),
       paymentId: z.string().optional(),
       amount: z.number().int().positive().optional(),
     }).parse({ ...req.query, ...req.body });
 
+    if (!q.txnRef && !q.paymentId) throw Errors.badRequest('Cần txnRef hoặc paymentId');
     let txnRef = q.txnRef;
-    if (!txnRef && q.paymentId) {
-      const p = db.prepare(`SELECT txn_ref, booking_id, user_id FROM payments WHERE id = ?`).get(q.paymentId);
-      if (!p) throw Errors.notFound('Không tìm thấy giao dịch');
-      if (req.user.role === 'customer') {
-        const b = db.prepare(`SELECT user_id FROM bookings WHERE id = ?`).get(p.booking_id);
-        if (!b || b.user_id !== req.user.id) throw Errors.forbidden();
-      }
-      txnRef = p.txn_ref;
+    const p = q.paymentId
+      ? db.prepare(`SELECT txn_ref, booking_id, user_id FROM payments WHERE id = ?`).get(q.paymentId)
+      : (txnRef ? db.prepare(`SELECT txn_ref, booking_id, user_id FROM payments WHERE txn_ref = ?`).get(txnRef.toUpperCase()) : null);
+    if (!p) throw Errors.notFound('Không tìm thấy giao dịch');
+    if (req.user.role === 'customer') {
+      const b = db.prepare(`SELECT user_id FROM bookings WHERE id = ?`).get(p.booking_id);
+      if (!b || b.user_id !== req.user.id) throw Errors.forbidden();
     }
-    if (!txnRef) throw Errors.badRequest('Cần txnRef hoặc paymentId');
+    txnRef = p.txn_ref;
 
     const payload = { txnRef: txnRef.toUpperCase(), amount: q.amount ?? null, providerTxnId: `SIM${Date.now()}`, status: 'SUCCESS' };
     const raw = JSON.stringify(payload);
@@ -230,9 +230,9 @@ router.post('/:id/confirm-manual', requireAuth, requireRole('staff', 'admin'),
   })
 );
 
-/** POST /api/payments/:bookingId/refund — hoàn tiền */
-router.post('/:bookingId/refund', requireAuth, requireRole('staff', 'admin'),
-  validate(z.object({ amount: z.number().int().positive().optional(), reason: z.string().max(300) })),
+/** POST /api/payments/:bookingId/refund — hoàn tiền (chỉ admin) */
+router.post('/:bookingId/refund', requireAuth, requireRole('admin'),
+  validate(z.object({ amount: z.number().int().positive().optional(), reason: z.string().trim().min(3).max(300) })),
   asyncHandler(async (req, res) => {
     const result = refundPayment({
       bookingId: req.params.bookingId, amount: req.body.amount ?? null,
@@ -264,6 +264,7 @@ router.get('/:id/stream', requireAuth, asyncHandler(async (req, res) => {
 
   // trạng thái hiện tại ngay khi kết nối (để client không bỏ lỡ nếu đã PAID trước đó)
   send('status', { paymentId: req.params.id, status: s.payment.status, bookingStatus: s.booking?.status });
+  if (config.isVercel) return res.end();
 
   const onStatus = (ev) => {
     if (ev.paymentId !== req.params.id) return;

@@ -14,8 +14,11 @@
  * ============================================================================
  */
 import { db } from '../src/db.js';
+import { signAccessToken } from '../src/middlewares/auth.js';
+import { newId, randomToken } from '../src/utils/id.js';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET || 'dev-webhook-secret';
 const PWD = 'Lakstay@2026';
 let pass = 0, fail = 0;
 const check = (name, cond, extra = '') => {
@@ -24,7 +27,11 @@ const check = (name, cond, extra = '') => {
 };
 
 const iso = (d) => d.toISOString().slice(0, 10);
-const addDays = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+const addDays = (n) => {
+  const vnNow = new Date(Date.now() + 7 * 3_600_000);
+  vnNow.setUTCDate(vnNow.getUTCDate() + n);
+  return iso(vnNow);
+};
 
 function jar() {
   const jar = new Map();
@@ -32,6 +39,7 @@ function jar() {
     header() { return [...jar].map(([k, v]) => `${k}=${v}`).join('; '); },
     absorb(res) { for (const c of res.headers.getSetCookie?.() || []) { const [kv] = c.split(';'); const i = kv.indexOf('='); jar.set(kv.slice(0, i).trim(), kv.slice(i + 1).trim()); } },
     get: (k) => jar.get(k),
+    set: (k, v) => jar.set(k, v),
   };
 }
 async function api(j, method, path, body, headers = {}) {
@@ -76,20 +84,29 @@ async function main() {
   r = await api(admin.jar, 'GET', `/api/rooms/${roomTypeId}/availability?checkIn=${checkIn}&checkOut=${checkOut}`);
   check('tồn kho ban đầu = 1', r.body.data.inventory.every((i) => i.available === 1));
 
-  /* ---------- Tạo N user để mỗi request là 1 "người" khác nhau ---------- */
+  /* ---------- Tạo N user thật trong DB + ký phiên để đủ N racer thực sự đua tranh ---------- */
   const N = Number(process.env.RACERS || 40);
   const users = [];
-  for (let i = 0; i < N; i++) {
-    const email = `racer${stamp}_${i}@test.local`;
-    const jr = jar();
-    await api(jr, 'GET', '/api/auth/csrf');
-    const reg = await api(jr, 'POST', '/api/auth/register', {
-      email, password: 'Racer@12345', fullName: `Racer ${i}`, phone: `09${String(10000000 + i).slice(0, 8)}`,
-    });
-    if (reg.status !== 201) { console.log('register fail', reg.status, JSON.stringify(reg.body).slice(0, 150)); }
-    users.push({ jar: jr, csrf: jr.get('lks_csrf') });
-  }
-  check(`tạo được ${N} user đua tranh`, users.length === N && users.every((u) => u.csrf));
+  const insUser = db.prepare(`
+    INSERT INTO users (id, email, phone, password_hash, full_name, role, status)
+    VALUES (?, ?, ?, '!', ?, 'customer', 'active')`);
+  const seedRacers = db.transaction(() => {
+    for (let i = 0; i <= N; i++) {
+      const uid = newId('usr');
+      const email = `racer${stamp}_${i}@test.local`;
+      const phone = `09${String(10000000 + i).slice(0, 8)}`;
+      insUser.run(uid, email, phone, `Racer ${i}`);
+      const jr = jar();
+      const csrf = randomToken(16);
+      jr.set('lks_csrf', csrf);
+      jr.set('lks_at', signAccessToken({ id: uid, role: 'customer', email }));
+      users.push({ userId: uid, email, jar: jr, csrf });
+    }
+  });
+  seedRacers();
+  const idemUser = users.pop();
+  check(`tạo được ${N} user đã xác thực để đua tranh thực sự`,
+    users.length === N && users.every((u) => u.userId && u.csrf && u.jar.get('lks_at')));
 
   /* ---------- Bắn N request ĐỒNG THỜI (có barrier thật) ---------- */
   const fireWave = async (offsetDays, label) => {
@@ -128,6 +145,8 @@ async function main() {
       + `   [${Math.min(...rs.map((x) => x.ms))}–${Math.max(...rs.map((x) => x.ms))}ms]`);
     if (Object.keys(codes).length) console.log(`        lý do: ${JSON.stringify(codes)}`);
     check(`${label}: ĐÚNG 1 booking thành công — không overbook`, okRs.length === 1, `got ${okRs.length}`);
+    check(`${label}: Mọi racer còn lại đều bị chặn ở tầng kho phòng (409), không rơi rụng 401/429`,
+      rejected.length === N - 1 && rejected.every((x) => x.status === 409), JSON.stringify(codes));
     return { ok: okRs, rejected, rs };
   };
 
@@ -157,7 +176,6 @@ async function main() {
   check('DB: đúng 2 booking hợp lệ cho phòng đơn này', confirmedBookings === 2, `got ${confirmedBookings}`);
 
   /* ---------- Idempotency dưới áp lực ---------- */
-  const idemUser = users[0];
   const idemKey = 'concurrency-' + stamp;
   const idemResults = await Promise.all(Array.from({ length: 10 }, () =>
     api(idemUser.jar, 'POST', '/api/bookings', {
@@ -167,17 +185,21 @@ async function main() {
     }, { 'x-csrf-token': idemUser.csrf, 'Idempotency-Key': idemKey })
   ));
   const uniqIds = new Set(idemResults.filter((x) => x.body?.data?.booking).map((x) => x.body.data.booking.id));
-  check('Idempotency: 10 request cùng key => đúng 1 booking', uniqIds.size === 1, `got ${uniqIds.size}`);
+  check('Idempotency: 10 request cùng key => đúng 1 booking',
+    uniqIds.size === 1 && idemResults.every((x) => x.status === 200 || x.status === 201), `got ${uniqIds.size}`);
 
   /* ---------- Payment race: 5 webhook cùng lúc ---------- */
-  const targetBooking = firstBooking;
+  const targetWinner = [...wave1.ok, ...wave2.ok][0];
+  const targetBooking = targetWinner?.booking;
+  const ownerRacer = targetWinner ? users[targetWinner.i] : admin;
   if (targetBooking) {
-    const pr = await api(idemUser.jar, 'POST', '/api/payments', { bookingId: targetBooking.id, provider: 'VIETQR' }, { 'x-csrf-token': idemUser.csrf });
+    const pr = await api(ownerRacer.jar, 'POST', '/api/payments', { bookingId: targetBooking.id, provider: 'VIETQR' }, { 'x-csrf-token': ownerRacer.csrf });
+    check('Tạo yêu cầu thanh toán cho booking thắng cuộc => 200', pr.status === 200, `got ${pr.status}`);
     if (pr.status === 200) {
       const payment = pr.body.data.payment;
       const crypto = await import('node:crypto');
-      const body = JSON.stringify({ txnRef: payment.txn_ref, amount: payment.amount, providerTxnId: 'RACE1' });
-      const sig = crypto.createHmac('sha256', 'dev-webhook-secret').update(body).digest('hex');
+      const body = JSON.stringify({ txnRef: payment.txn_ref, amount: payment.amount, providerTxnId: `RACE_${stamp}` });
+      const sig = crypto.createHmac('sha256', WEBHOOK_SECRET).update(body).digest('hex');
       const whResults = await Promise.all(Array.from({ length: 5 }, () =>
         fetch(`${BASE}/api/payments/webhook/VIETQR`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-signature': sig }, body,

@@ -18,8 +18,10 @@ Request tạo booking/thanh toán nên gửi header `Idempotency-Key`.
 | GET | `/rooms` | Danh sách hạng phòng + tồn kho theo kỳ ở (`checkIn, checkOut, guests, maxPrice, sort, page, limit`) |
 | GET | `/rooms/:slug` | Chi tiết phòng: tiện nghi, lịch trống 30 ngày, preview chính sách huỷ, review |
 | GET | `/rooms/:id/availability?checkIn&checkOut` | Tồn kho từng đêm |
+| GET | `/rooms/cheapest?month=YYYY-MM` | Gợi ý các ngày có giá thấp nhất trong tháng |
 | POST | `/rooms/quote` | Báo giá chi tiết từng đêm (+coupon) — không cần đăng nhập |
 | GET | `/reviews` | Đánh giá công khai + phân bố điểm |
+| GET | `/verify/:code` | Trang xác thực mã QR trên Voucher PDF (che bớt họ tên & SĐT khách) |
 | GET | `/healthz` | Health check |
 
 ## Auth `/auth`
@@ -45,6 +47,7 @@ Request tạo booking/thanh toán nên gửi header `Idempotency-Key`.
 | GET | `/code/:code` | Tra theo mã đặt phòng |
 | GET | `/:id/cancel-policy` | Xem trước tiền hoàn nếu huỷ bây giờ |
 | POST | `/:id/cancel` | Huỷ + tự tạo giao dịch hoàn |
+| GET | `/:id/voucher` · `/:id/voucher.pdf` | Xem bản in HTML hoặc tải Voucher A4 định dạng PDF (có QR xác thực) |
 | POST | `/:id/transition` | staff/admin đổi trạng thái (`to: CHECKED_IN/COMPLETED/...`) |
 | GET | `/meta/status` | Metadata trạng thái cho UI |
 
@@ -55,6 +58,7 @@ Request tạo booking/thanh toán nên gửi header `Idempotency-Key`.
 | GET | `/providers` | – | Danh sách phương thức + thông tin thụ hưởng |
 | POST | `/` | ✅ | Tạo payment + QR. Body `{bookingId, provider, amount?}` |
 | GET | `/:id/status` | ✅ | Trạng thái (client poll) |
+| GET | `/:id/stream` | ✅ | Luồng SSE đẩy trạng thái thanh toán theo thời gian thực |
 | GET | `/mine/list` | ✅ | Lịch sử giao dịch của tôi |
 | POST | `/webhook/:provider` | chữ ký | Cổng thanh toán báo kết quả (HMAC) |
 | POST | `/simulate/success` | ✅ | **chỉ dev/demo**: giả lập bank callback hợp lệ |
@@ -73,6 +77,13 @@ Request tạo booking/thanh toán nên gửi header `Idempotency-Key`.
 | POST | `/:id/reply` | staff | Phản hồi |
 | PATCH | `/:id/moderate` | staff | Duyệt/ẩn |
 
+## Loyalty `/loyalty`
+
+| Method | Path | Auth | Mô tả |
+|---|---|---|---|
+| GET | `/tiers` | – | Cấu hình 4 hạng thành viên (`MEMBER`, `SILVER`, `GOLD`, `PLATINUM`) & quyền lợi |
+| GET | `/me` | ✅ | Điểm hiện tại, hạng thành viên, tiến trình lên hạng & sổ cái điểm |
+
 ## Admin `/admin` (staff; một số chỉ admin)
 
 | Method | Path | Quyền | Mô tả |
@@ -90,7 +101,10 @@ Request tạo booking/thanh toán nên gửi header `Idempotency-Key`.
 | GET/PATCH | `/users[/:id]` | admin | Người dùng, phân quyền, khoá |
 | GET | `/payments` | staff | Giao dịch |
 | GET | `/reports/occupancy?days=` | staff | Báo cáo công suất |
+| GET | `/reports/series?days=` | staff | Chuỗi dữ liệu biểu đồ doanh thu / số đơn / công suất |
 | GET | `/reports/revenue.csv?days=` | admin | Xuất CSV doanh thu |
+| GET | `/outbox` · GET `/outbox/:id` | staff | Danh sách & nội dung email xác nhận lưu tại Outbox |
+| POST | `/bookings/:id/resend-email` | staff | Gửi lại email xác nhận kèm Voucher PDF |
 | GET | `/audit-logs` | admin | Nhật ký nghiệp vụ |
 | GET | `/security-events` | admin | Sự kiện an ninh |
 | POST | `/jobs/run` | admin | Chạy job thủ công |

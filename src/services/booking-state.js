@@ -54,7 +54,7 @@ export const TRANSITIONS = {
     REFUNDED: { by: ['admin'], trigger: 'REFUND', note: 'Hoàn tiền ngoại lệ' },
   },
   CANCELLED: {
-    REFUNDED: { by: ['staff', 'admin', 'system'], trigger: 'REFUND', note: 'Hoàn tiền theo chính sách' },
+    REFUNDED: { by: ['admin', 'system'], trigger: 'REFUND', note: 'Hoàn tiền theo chính sách' },
   },
   NO_SHOW: {
     REFUNDED: { by: ['admin'], trigger: 'REFUND', note: 'Hoàn tiền ngoại lệ' },
